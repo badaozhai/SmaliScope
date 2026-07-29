@@ -30,7 +30,13 @@ print("1) 设备与应用探测")
 b = call("GET", "/api/bootstrap")
 check("发现在线设备", b["ok"], b.get("serial", ""))
 target = [a for a in b["apps"] if a["pkg"] == "com.smaliscope.testapp"]
-check("测试应用被识别为可调试", bool(target) and target[0]["debuggable"])
+check("测试应用在设备上", bool(target))
+# 可调试标记 = 有进程且该进程在 adb jdwp 列表里。应用没在跑时它本来就该是 false
+# （刚重装过就是这种情况），此时不该判失败——后面的 /api/start 会把它拉起来。
+if target and target[0]["pid"] is None:
+    print("     · 应用当前未运行，可调试标记要等启动后才为真，跳过该项")
+else:
+    check("运行中的测试应用被识别为可调试", bool(target) and target[0]["debuggable"])
 
 print("2) 载入 APK 并做静态分析")
 s = call("POST", "/api/session", pkg="com.smaliscope.testapp")

@@ -13,6 +13,7 @@ SmaliScope —— 面向新手的 DEX/smali 指令级断点调试器
   dump <包名> [类名] [方法名]     反汇编：列类 / 列方法 / dump 带 dex_pc 的 smali
   debug <包名> <类名> <方法名> [步数] [into|over]
                                  命令行调试：下断点 → 挂起启动 → 命中 → 单步看寄存器变化
+  audit <包名> <类名> [方法名]     统计寄存器可读率：逐指令单步走完，量「应读 / 实读」
   serve [--port 8080]            启动本地 Web 调试工作台（默认）
   mcp                            以 MCP server 运行（JSON-RPC over stdio），供 AI agent 驱动调试
   mcp-install                    把自己注册进本机 MCP 客户端（grok / Claude Code）的配置
@@ -32,6 +33,7 @@ fun main(args: Array<String>) {
         first == "apps" -> cmdApps()
         first == "dump" -> cmdDump(argv.drop(1))
         first == "debug" -> cmdDebug(argv.drop(1))
+        first == "audit" -> cmdAudit(argv.drop(1))
         first == "serve" -> cmdServe(argv.drop(1))
         first == "mcp" -> cmdMcp()
         first == "mcp-install" -> cmdMcpInstall()
@@ -305,6 +307,53 @@ private fun printStop(
         }
     }
     println()
+}
+
+/**
+ * 量清楚真实 APK 上的寄存器可读率（ROADMAP 第 0 项）。
+ *
+ * ART 校验读寄存器的 tag 用的是 dex 调试信息里「声明」的类型，
+ * 所以在缺少调试信息或经过混淆的包上，寄存器面板还能剩下多少内容是个未知数——
+ * 而寄存器面板是本项目的头号卖点。这个命令用实测数字回答它。
+ */
+private fun cmdAudit(args: List<String>) {
+    if (args.size < 2) {
+        System.err.println("用法: audit <包名> <类名> [方法名]")
+        kotlin.system.exitProcess(2)
+    }
+    val pkg = args[0]
+    val className = args[1]
+    val onlyMethod = args.getOrNull(2)
+
+    val dbg = com.smaliscope.session.Debugger(cacheDir)
+    dbg.onLog = { println("  · $it") }
+    Runtime.getRuntime().addShutdownHook(Thread { runCatching { dbg.close() } })
+
+    dbg.use {
+        val b = dbg.bootstrap()
+        if (!b.ok) { System.err.println(b.message); kotlin.system.exitProcess(1) }
+        println("设备：${b.serial}")
+        dbg.loadApp(pkg)
+
+        val fqcn = dbg.resolveClass(className)
+            ?: run { System.err.println("未找到类 $className"); kotlin.system.exitProcess(1) }
+        val targets = dbg.apk!!.concreteMethodsOf(fqcn)
+            .filter { onlyMethod == null || it.name == onlyMethod }
+            // 构造函数在 <clinit>/字段初始化里被调用，走位不稳定，默认跳过以免拖长审计。
+            .filter { onlyMethod != null || !it.name.startsWith("<") }
+        if (targets.isEmpty()) {
+            System.err.println("没有可审计的方法")
+            kotlin.system.exitProcess(1)
+        }
+        println("待审计方法：${targets.joinToString { it.name + it.signature }}")
+        println()
+
+        val results = com.smaliscope.session.Auditor(dbg)
+            .audit(targets, onProgress = { println("  · $it") })
+
+        println()
+        println(com.smaliscope.session.Auditor.report("$fqcn（$pkg）", results))
+    }
 }
 
 /**

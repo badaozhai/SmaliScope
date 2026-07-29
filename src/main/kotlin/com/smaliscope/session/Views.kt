@@ -16,6 +16,12 @@ data class RegisterView(
     /** 相比上一步是否发生变化——寄存器 diff 高亮的依据。 */
     val changed: Boolean,
     val readable: Boolean,
+    /**
+     * 「推导出了可读的类型，但设备拒绝读取」时的原因。
+     * 非 null 表示我们确实尝试过并失败了——这与「该位置本就没有有效值」是两回事，
+     * 统计寄存器可读率时必须分开算。
+     */
+    val error: String? = null,
     /** 引用型才有，供对象图下钻。 */
     val objectId: Long? = null,
     val expandable: Boolean = false,

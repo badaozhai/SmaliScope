@@ -42,10 +42,16 @@ python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（�
 
 - **读寄存器的 tag，ART 是拿 dex 调试信息里「声明」的类型来校验的，不是当前 dex_pc 上的实际类型。**
   d8 会把声明为 `int x` 的参数寄存器复用来存对象；此时按 MethodAnalyzer 推导出的引用类型去读，
-  会被拒为 `TYPE_MISMATCH(34)`，而按声明的 int 读则能成功（但拿到的是无意义的堆内偏移）。
-  `FrameReader.readOne` 用这个差异来区分「确实读不了」和「类型对不上」，给出可理解的说明而不是垃圾值。
-  测试 APK 用 `javac -g` 构建正是为了避开这个问题——有作用域的局部变量表后，d8 不再复用参数寄存器。
-  **含义**：对没有调试信息的 release APK，部分寄存器会读不出来，这是平台限制，不是 bug。
+  会被拒为 `TYPE_MISMATCH(34)`。`FrameReader.readOne` 用这个差异区分「确实读不了」和「类型对不上」，
+  给出可理解的说明而不是垃圾值。
+
+  **已用 `smaliscope audit` 实测量化，结论见 [docs/register-readability.md](docs/register-readability.md)：**
+  局部寄存器 `vN` 在所有构建配置下 **100% 可读**；失败无一例外集中在被复用的参数寄存器 `pN` 上；
+  最坏情况（R8 release 包）总可读率 96.3%。**产品成立，不需要改方案。**
+
+  反直觉的一点：`-g:none`（完全无调试信息）反而 100% 可读，因为 ART 没有声明类型可以否决；
+  而 `-g:lines,source`（**javac 默认**、也是多数 release 构建的选择，为了保留崩溃栈行号）
+  会连带写入覆盖整个方法的参数类型，恰好落在最差的一档。改动读寄存器路径前先读那份实测报告。
 
 - **本机模拟器镜像是 Play 商店镜像**：`ro.debuggable=0` 且 `adb root` 不可用，
   因此只有自带 `android:debuggable="true"` 的应用（即 `testapp/`）能调。

@@ -49,6 +49,7 @@ object Json {
         "value" to str(r.value),
         "changed" to bool(r.changed),
         "readable" to bool(r.readable),
+        "error" to str(r.error),
         "objectId" to num(r.objectId),
         "expandable" to bool(r.expandable),
         "hint" to str(r.hint),

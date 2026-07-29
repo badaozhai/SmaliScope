@@ -108,6 +108,8 @@ class FrameReader(
                 value = display,
                 changed = false,
                 readable = kind.readable && v != null,
+                // 只有「本该能读却没读到」才算错误；类型推不出来时我们根本没去读。
+                error = if (kind.readable && v == null) (errors[reg] ?: "读取失败") else null,
                 objectId = objId,
                 expandable = objId != null && objId != 0L,
                 hint = model.paramHint(reg),

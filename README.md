@@ -112,6 +112,7 @@ smaliscope apps                                   # 列出设备上的应用与�
 smaliscope dump <包名> [类名] [方法名]              # dump 带 dex_pc 的 smali、CFG、类型推导
 smaliscope debug <包名> <类名> <方法名> [步数] [into|over]
                                                   # 下断点 → 挂起启动 → 命中 → 单步打印寄存器
+smaliscope audit <包名> <类名> [方法名]             # 统计寄存器可读率
 smaliscope mcp                                    # 以 MCP server 运行（stdio）
 smaliscope mcp-install                            # 注册进本机 MCP 客户端
 ```
@@ -203,6 +204,24 @@ python3 scripts/mcp-e2e.py
 | M9 | 中文错误引导 ✅ / jpackage 三平台打包 ❌ | 部分 |
 | — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
 
+## 已知限制：寄存器可读率
+
+ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息里该 slot **声明**的类型，
+而不是它当前实际持有的类型。d8 会把声明为 `int` 的参数寄存器复用去存对象，那几条指令上
+就读不出来了。这是平台限制，不是 bug。
+
+已用 `smaliscope audit` 实测量化（详见 [docs/register-readability.md](docs/register-readability.md)）：
+
+| 构建方式 | 总可读率 | 参数 `pN` | 局部 `vN` |
+|---|---|---|---|
+| `javac -g` | 100 % | 100 % | 100 % |
+| `javac -g:none` | 100 % | 100 % | 100 % |
+| `javac -g:lines,source`（javac 默认，典型 release） | 95.1 % | 90.1 % | 100 % |
+| 再过 R8 `--release`（近似真实发布包） | 96.3 % | 92.4 % | 100 % |
+
+**局部寄存器 `vN` 在所有配置下都 100% 可读**，失败只集中在被复用的参数寄存器上。
+读不出来时界面会写明原因，而不是显示 0 或空白——把「不可读」误当成「值是 0」比不显示更糟。
+
 ## 尚未实现
 
 - **P1 / P2 接入路径**：目前只做**探测与说明**（告诉你当前设备属于哪种情况、为什么某些应用不可调），没有实现「root 下自动 resetprop / 装 Magisk 模块」和「非 root 重打包 + 重签名」这两条自动准备路径。因此在 `ro.debuggable=0` 的设备上，只能调试自身带 debuggable 标记的应用。
@@ -239,6 +258,7 @@ scripts/e2e.py             Web 侧端到端回归（需设备）
 scripts/mcp-e2e.py         MCP 侧端到端回归（需设备）
 scripts/shots.py           重新生成 README 里的界面截图（Chrome headless + CDP）
 docs/images/               界面截图
+docs/register-readability.md  寄存器可读率实测报告
 ```
 
 设计细节见 [`Smali断点调试器-系统设计方案.md`](Smali断点调试器-系统设计方案.md)，
