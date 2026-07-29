@@ -17,6 +17,8 @@ object Tools {
         val name: String,
         val description: String,
         val schema: String,
+        /** 需要 LLM 配置的工具，没配 key 时不注册——省得 agent 去调一个必然失败的工具。 */
+        val requiresLlm: Boolean = false,
         val run: (Debugger, Jv) -> String,
     )
 
@@ -290,7 +292,46 @@ object Tools {
             dbg.control("stop")
             "已结束调试会话。"
         },
+
+        Tool(
+            "explain_code",
+            "让配置好的大模型讲解一个方法在做什么。会把 smali、jadx 反编译出的 Java " +
+                "以及（若正停在该方法上）寄存器的真实值一起作为上下文。仅在需要自然语言概述时使用；" +
+                "要精确事实请直接用 disassemble / read_registers。",
+            schema(
+                prop("class", "string", "类名"),
+                prop("method", "string", "方法名"),
+                prop("signature", "string", "可选，JVM 方法签名"),
+                prop("dexPc", "integer", "可选，重点讲解这条指令"),
+                required = listOf("class", "method"),
+            ),
+            requiresLlm = true,
+        ) { dbg, a ->
+            val (fqcn, name, sig) = resolveMethod(dbg, a)
+            dbg.explain(fqcn, name, sig, a["dexPc"]?.int)
+        },
+
+        Tool(
+            "suggest_register_names",
+            "针对混淆过的方法，结合数据流与调用到的 framework API，为 v0/v1 这类无意义的寄存器" +
+                "猜测语义名。结果是推测，不是事实，不要拿它当依据继续推理。",
+            schema(
+                prop("class", "string", "类名"),
+                prop("method", "string", "方法名"),
+                prop("signature", "string", "可选，JVM 方法签名"),
+                required = listOf("class", "method"),
+            ),
+            requiresLlm = true,
+        ) { dbg, a ->
+            val (fqcn, name, sig) = resolveMethod(dbg, a)
+            dbg.nameRegisters(fqcn, name, sig)
+        },
     )
+
+    private fun available(): List<Tool> {
+        val llm = com.smaliscope.config.Settings.llm().enabled
+        return TOOLS.filter { llm || !it.requiresLlm }
+    }
 
     // ── 参数解析辅助 ────────────────────────────────────────────────────────
 
@@ -310,7 +351,7 @@ object Tools {
     // ── 对外 ────────────────────────────────────────────────────────────────
 
     fun schemaJson(): String = Json.arr(
-        TOOLS.map {
+        available().map {
             Json.obj(
                 "name" to Json.str(it.name),
                 "description" to Json.str(it.description),
@@ -320,8 +361,13 @@ object Tools {
     )
 
     fun dispatch(dbg: Debugger, name: String, args: Jv): String {
-        val tool = TOOLS.firstOrNull { it.name == name }
-            ?: error("未知工具 $name。可用：${TOOLS.joinToString(", ") { it.name }}")
+        val tools = available()
+        val tool = tools.firstOrNull { it.name == name }
+            ?: if (TOOLS.any { it.name == name }) {
+                error("工具 $name 需要先配置大模型 API key（smaliscope config llm.apiKey <key>）")
+            } else {
+                error("未知工具 $name。可用：${tools.joinToString(", ") { it.name }}")
+            }
         return tool.run(dbg, args)
     }
 }

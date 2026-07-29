@@ -115,6 +115,7 @@ smaliscope debug <包名> <类名> <方法名> [步数] [into|over]
 smaliscope audit <包名> <类名> [方法名]             # 统计寄存器可读率
 smaliscope mcp                                    # 以 MCP server 运行（stdio）
 smaliscope mcp-install                            # 注册进本机 MCP 客户端
+smaliscope config [键 [值]] [--test]               # 查看 / 修改配置
 ```
 
 例如：
@@ -166,6 +167,30 @@ SmaliScope 实现了标准 **MCP**（Model Context Protocol），可以让 agent
 
 > 这里刻意做的是**通用 MCP server**，不是给某一家 agent 定制的适配器。
 > MCP 是开放协议，做一次就能被 grok-build、Claude Code、Cursor 等任何客户端使用。
+
+## 可选：接大模型讲解代码
+
+配置一个 OpenAI 兼容的接口后，界面上会多出「AI 解释」标签页，MCP 也会多注册两个工具
+（`explain_code`、`suggest_register_names`）。**没配 key 时这些入口整个不出现。**
+
+```bash
+smaliscope config llm.apiKey  <你的key>
+smaliscope config llm.baseUrl https://api.x.ai    # 默认 https://claudegpt.org
+smaliscope config llm.model   grok-4
+smaliscope config --test                          # 测连通性
+```
+
+也可用环境变量覆盖：`SMALISCOPE_LLM_BASE_URL` / `SMALISCOPE_LLM_API_KEY` / `SMALISCOPE_LLM_MODEL`。
+地址会自动补 `/v1/chat/completions`，填裸域名、带 `/v1` 或完整 endpoint 都行。
+
+它能做两件事：**讲解当前方法**（把 smali、jadx 的 Java、以及运行时寄存器真实值一起作为上下文——
+最后一项是纯静态工具给不出的），以及**给混淆包猜寄存器语义名**（结合数据流和调用到的 framework API）。
+
+划定的边界写死在代码里，不要放宽：不进单步热路径（实时性是本项目卖点，一次网络往返就毁了）、
+不替代寄存器类型推导（那必须是确定性的，猜错会静默读出垃圾值）、不让模型判断有无漏洞。
+
+> ⚠️ 调用会把 smali、反编译出的 Java 和运行时寄存器值发送到你配置的地址。
+> 你调试的往往是**别人的** APK，请确认该地址可信后再启用。
 
 ## 测试
 
@@ -252,6 +277,8 @@ src/main/kotlin/com/smaliscope/
   dict/         smali 指令中文词典
   server/       本地 HTTP + SSE 工作台；极简 JSON 读写
   mcp/          标准 MCP server（JSON-RPC over stdio）与工具集
+  config/       本地配置（大模型接口地址与 key）
+  explain/      可选的大模型讲解：OpenAI 兼容客户端 + 提示词构造
 src/main/resources/web/    前端（无框架，原生 JS/CSS/SVG）
 testapp/                   自带的 debuggable 测试应用（aapt2 + javac + d8 手工构建）
 scripts/e2e.py             Web 侧端到端回归（需设备）

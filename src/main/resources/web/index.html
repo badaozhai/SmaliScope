@@ -59,6 +59,7 @@
       <button class="tab" data-panel="object">对象图</button>
       <button class="tab" data-panel="timeline">执行时间线</button>
       <button class="tab" data-panel="bp">断点</button>
+      <button class="tab hidden" data-panel="explain" id="tabExplain">AI 解释</button>
       <button class="tab" data-panel="log">日志</button>
     </div>
     <div class="panels">
@@ -68,6 +69,14 @@
       <div class="panel" id="panel-object"><div class="empty">在寄存器面板点击一个对象即可展开它的字段。</div></div>
       <div class="panel" id="panel-timeline"><div class="empty">单步过程会被逐步记录，可拖动回看任意一步。</div></div>
       <div class="panel" id="panel-bp"><div class="empty">尚未设置断点。</div></div>
+      <div class="panel" id="panel-explain">
+        <div class="explain-bar">
+          <button id="btnExplainCode">讲解当前方法</button>
+          <button id="btnExplainRegs">猜寄存器语义名</button>
+          <span class="explain-note">会把 smali、反编译的 Java 和当前寄存器值发送到你配置的接口地址</span>
+        </div>
+        <div id="explainOut" class="empty">点上面的按钮开始。结果是模型的推测，不是事实依据。</div>
+      </div>
       <div class="panel" id="panel-log"><div id="logList"></div></div>
     </div>
   </div>

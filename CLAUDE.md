@@ -113,6 +113,11 @@ python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（�
 
 - **文档与所有用户可见文案用中文**；UI 层不暴露 dex_pc / JDWP tag / slot / ClassPrepare 这些词，
   只说「行 / 寄存器 / 类型」。错误提示给中文的下一步指引，不是英文异常栈。
+- **可选的大模型功能必须保持「没配 key 就不存在」**：`config/Settings.kt` 读
+  `~/.smaliscope/config.properties`（环境变量优先），`llm.enabled` 为假时
+  Web 界面不显示标签页、MCP 不注册 `explain_code` / `suggest_register_names`。
+  边界写在 `explain/Explainer.kt` 的注释里：不进单步热路径、不替代类型推导、不做安全判断。
+  改这块前先想清楚是否越界。
 - **第三方依赖只有 dexlib2 / baksmali / jadx / kotlinx-coroutines**。HTTP、SSE、JSON 都是手写的极简实现，
   刻意不引序列化框架和 Web 框架——少一个依赖少一层版本纠纷。加依赖前先想清楚是否真的必要。
 - 前端无框架，原生 JS + CSS + SVG。列表项用 `clickable()` 挂 `role`/`tabindex`，键盘和读屏可用。

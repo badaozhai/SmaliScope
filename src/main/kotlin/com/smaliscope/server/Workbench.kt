@@ -73,6 +73,7 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
             handle(ex) { json(ex, Json.arr(dbg.timeline().map { Json.of(it) })) }
         }
         server.createContext("/api/state") { ex -> handle(ex) { json(ex, Json.of(dbg.state)) } }
+        server.createContext("/api/explain") { ex -> handle(ex) { json(ex, explain(query(ex))) } }
     }
 
     private fun ok() = Json.obj("ok" to Json.bool(true))
@@ -107,6 +108,8 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
             }),
             // 已有会话时一并回给前端，刷新页面才能恢复现场——
             // 状态本来只从 SSE 推来，新打开的页面在下一次事件之前是空的。
+            // 没配 API key 时前端连按钮都不显示。
+            "llm" to Json.bool(dbg.llmEnabled()),
             "session" to (dbg.pkg?.let {
                 Json.obj(
                     "pkg" to Json.str(it),
@@ -171,6 +174,29 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
 
     private fun frame(q: Map<String, String>): String =
         dbg.readFrame(q["depth"]?.toIntOrNull() ?: 0)?.let { Json.of(it) } ?: "null"
+
+    /**
+     * AI 讲解。慢（要往外发一次请求），所以只在用户点按钮时才会走到这里，
+     * 绝不出现在单步路径上。
+     */
+    private fun explain(q: Map<String, String>): String {
+        if (!dbg.llmEnabled()) {
+            return Json.obj(
+                "ok" to Json.bool(false),
+                "message" to Json.str(
+                    "尚未配置 API key。命令行执行 `smaliscope config llm.apiKey <你的key>` 后刷新页面。"
+                ),
+            )
+        }
+        val cls = q["class"] ?: error("缺少 class")
+        val method = q["method"] ?: error("缺少 method")
+        val sig = q["sig"] ?: error("缺少 sig")
+        val text = when (q["mode"]) {
+            "registers" -> dbg.nameRegisters(cls, method, sig)
+            else -> dbg.explain(cls, method, sig, q["pc"]?.toIntOrNull())
+        }
+        return Json.obj("ok" to Json.bool(true), "text" to Json.str(text))
+    }
 
     private fun javaSource(q: Map<String, String>): String {
         val cls = q["class"] ?: error("缺少 class")

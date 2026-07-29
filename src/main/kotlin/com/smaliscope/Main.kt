@@ -17,6 +17,7 @@ SmaliScope —— 面向新手的 DEX/smali 指令级断点调试器
   serve [--port 8080]            启动本地 Web 调试工作台（默认）
   mcp                            以 MCP server 运行（JSON-RPC over stdio），供 AI agent 驱动调试
   mcp-install                    把自己注册进本机 MCP 客户端（grok / Claude Code）的配置
+  config [键 [值]] [--test]       查看 / 修改配置（大模型接口地址与 key 等）
 """
 
 /** APK 本地缓存目录。 */
@@ -37,6 +38,7 @@ fun main(args: Array<String>) {
         first == "serve" -> cmdServe(argv.drop(1))
         first == "mcp" -> cmdMcp()
         first == "mcp-install" -> cmdMcpInstall()
+        first == "config" -> cmdConfig(argv.drop(1))
         first == "-h" || first == "--help" -> println(USAGE.trim())
         else -> {
             System.err.println("未知命令: $first")
@@ -365,6 +367,66 @@ private fun cmdMcp() {
     Runtime.getRuntime().addShutdownHook(Thread { runCatching { dbg.close() } })
     System.err.println("SmaliScope MCP server 已就绪（stdio）")
     com.smaliscope.mcp.McpServer(dbg).serve(System.`in`, System.out)
+}
+
+/**
+ * 查看 / 修改配置。大模型接口是可选功能：没配 key 时，
+ * Web 界面上不出现按钮、MCP 里也不注册相关工具。
+ */
+private fun cmdConfig(args: List<String>) {
+    val S = com.smaliscope.config.Settings
+
+    if (args.firstOrNull() == "--test") {
+        val llm = S.llm()
+        if (!llm.enabled) {
+            System.err.println("尚未配置 llm.apiKey，无法测试")
+            kotlin.system.exitProcess(1)
+        }
+        println("正在连接 ${llm.chatEndpoint} （模型 ${llm.model}）…")
+        try {
+            println("✅ 连通正常，返回：${com.smaliscope.explain.LlmClient().ping()}")
+        } catch (t: Throwable) {
+            System.err.println("❌ ${t.message}")
+            kotlin.system.exitProcess(1)
+        }
+        return
+    }
+
+    if (args.isNotEmpty()) {
+        val key = args[0]
+        if (key !in S.knownKeys) {
+            System.err.println("未知配置项 $key，可用：${S.knownKeys.joinToString(", ")}")
+            kotlin.system.exitProcess(2)
+        }
+        if (args.size < 2) {
+            System.err.println("用法: config $key <值>（值留空用 '' 表示清除）")
+            kotlin.system.exitProcess(2)
+        }
+        S.set(key, args[1])
+        println("已写入 ${S.file}")
+    }
+
+    val llm = S.llm()
+    println()
+    println("大模型接口（可选，用于「解释这段代码」与「猜寄存器语义名」）")
+    println("  llm.baseUrl : ${llm.baseUrl}")
+    println("  llm.model   : ${llm.model}")
+    println("  llm.apiKey  : ${llm.maskedKey}")
+    println("  实际请求地址 : ${llm.chatEndpoint}")
+    println("  状态        : ${if (llm.enabled) "已启用" else "未启用（没有 key 时该功能整体隐藏）"}")
+    println()
+    println("配置文件：${S.file}")
+    println("也可用环境变量覆盖：SMALISCOPE_LLM_BASE_URL / SMALISCOPE_LLM_API_KEY / SMALISCOPE_LLM_MODEL")
+    println()
+    println("⚠ 调用会把 smali、反编译出的 Java 和运行时寄存器值发送到上面配置的地址。")
+    println("  你调试的往往是别人的 APK，请确认该地址可信后再启用。")
+    println()
+    println("设置示例：")
+    println("  smaliscope config llm.apiKey  <你的key>")
+    println("  smaliscope config llm.baseUrl https://api.x.ai      # 换成 xAI 官方接口")
+    println("  smaliscope config --test                            # 测试连通性")
+    println()
+    println("让 AI agent 驱动调试器（与上面的接口配置无关）：smaliscope mcp-install")
 }
 
 /** 本可执行文件的绝对路径，写进 MCP 客户端配置用。 */

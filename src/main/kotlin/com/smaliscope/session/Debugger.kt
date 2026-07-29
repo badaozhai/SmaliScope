@@ -261,6 +261,26 @@ class Debugger(
         return awaitStopAfter(currentStopSeq(), timeoutMs)
     }
 
+    // ── AI 解释（可选功能，没配 API key 时整个不存在）──────────────────────
+
+    @Volatile
+    private var explainerRef: com.smaliscope.explain.Explainer? = null
+
+    /** 每次读配置，方便用户改完 key 不必重启。 */
+    private fun explainer(): com.smaliscope.explain.Explainer =
+        explainerRef ?: com.smaliscope.explain.Explainer(this).also { explainerRef = it }
+
+    fun llmEnabled(): Boolean = com.smaliscope.config.Settings.llm().enabled
+
+    /** 配置变更后丢弃旧客户端。 */
+    fun reloadLlm() { explainerRef = null }
+
+    fun explain(fqcn: String, method: String, signature: String, dexPc: Int?): String =
+        explainer().explainMethod(fqcn, method, signature, dexPc)
+
+    fun nameRegisters(fqcn: String, method: String, signature: String): String =
+        explainer().nameRegisters(fqcn, method, signature)
+
     fun expandObject(objectId: Long): ObjectNode? = session?.expandObject(objectId)
 
     fun readFrame(depth: Int): FrameView? = session?.readFrame(depth)

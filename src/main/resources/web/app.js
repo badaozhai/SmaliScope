@@ -81,6 +81,9 @@ async function boot() {
     }
     if (!sorted.length) sel.appendChild(el('option', null, '设备上没有第三方应用'));
 
+    // 没配大模型 API key 时，这个标签页整个不出现。
+    $('#tabExplain').classList.toggle('hidden', !b.llm);
+
     // 刷新页面时恢复现场：状态本来只从 SSE 推来，新页面在下一次事件之前是空的。
     if (b.session && b.session.pkg) await restore(b.session.pkg);
   } catch (e) {
@@ -673,6 +676,31 @@ function moveTip(e) {
   t.style.top = y + 'px';
 }
 function hideTip() { $('#tip').classList.add('hidden'); }
+
+// ── AI 解释（可选功能）───────────────────────────────────────────────────
+async function explain(mode) {
+  if (!S.cls || !S.method) { hint('请先选一个方法', 'error'); return; }
+  const out = $('#explainOut');
+  out.className = 'empty';
+  out.textContent = mode === 'registers' ? '正在推测寄存器语义…' : '正在生成讲解…';
+  $$('#panel-explain button').forEach(b => { b.disabled = true; });
+  try {
+    const r = await get('/api/explain', {
+      class: S.cls, method: S.method, sig: S.sig,
+      pc: currentPcInThisMethod(), mode,
+    });
+    out.className = '';
+    out.textContent = r && r.ok ? r.text : ((r && r.message) || '没有返回内容');
+  } catch (e) {
+    out.className = 'empty';
+    out.textContent = '调用失败：' + e.message;
+  } finally {
+    $$('#panel-explain button').forEach(b => { b.disabled = false; });
+  }
+}
+
+$('#btnExplainCode').onclick = () => explain('code');
+$('#btnExplainRegs').onclick = () => explain('registers');
 
 // ── 事件流 ───────────────────────────────────────────────────────────────
 function connectEvents() {
