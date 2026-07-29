@@ -99,6 +99,7 @@ class Debugger(
         log("正在获取 $packageName 的 APK…")
         val apps = DeviceApps(adb, s)
         val files = apps.pullApks(packageName, cacheDir)
+        files.forEach { log("  ${it.name}  ${it.length() / 1024} KB") }
         val env = apps.probeEnvironment()
         val index = ApkIndex(files, env.sdk.coerceIn(21, 35))
         log("已解析 ${index.classCount} 个类")

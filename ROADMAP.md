@@ -176,7 +176,13 @@ jpackage 出三平台安装包并内嵌 JRE；首次运行自动下载 platform-
 
 ## 零散项
 
-- `Main.kt` 里 `cmdServe` 之外的子命令各自 new 了一份 `ApkIndex`，重复拉包解析，可以共享缓存。
+- ~~`Main.kt` 里子命令各自 new 一份 `ApkIndex`~~ ✅ 已统一到 `session/Debugger`：
+  `dump` / `debug` / `audit` / `serve` 与 MCP 现在共用同一条加载与会话路径。
 - 断点目前只能按 dex_pc 下；设计方案 §6 的「预设断点模板」（断在所有 Activity.onCreate）还没做。
 - 前端的时间线只在切到该标签时刷新，单步过程中不是实时增长的。
-- `DeviceApps.runningProcesses()` 解析 `ps -A -o PID,NAME`，不同 Android 版本输出格式有差异，未做兼容测试。
+- **偶发**：上一次调试会话结束后紧接着开新会话，有时断点等待会超时，
+  强杀目标应用后重试即恢复。`launchSuspended` 已经先做了
+  `am clear-debug-app` + `am force-stop`，所以怀疑是旧连接或
+  `mDebugTransient` 状态没散干净，尚未定位。复现不稳定，先记着。
+- `DeviceApps.runningProcesses()` 解析 `ps -A -o PID,NAME`。已在 Android 14 与 16 上实测可用，
+  但更老的版本输出格式可能不同，尚未覆盖。

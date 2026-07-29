@@ -77,17 +77,13 @@ private fun cmdDump(args: List<String>) {
         System.err.println("用法: dump <包名> [类名] [方法名]")
         kotlin.system.exitProcess(2)
     }
-    val adb = AdbClient()
-    val device = adb.pickDevice()
-    val apps = com.smaliscope.session.DeviceApps(adb, device.serial)
-
-    println("正在获取 $pkg 的 APK…")
-    val apks = apps.pullApks(pkg, cacheDir)
-    apks.forEach { println("  ${it.name}  ${it.length() / 1024} KB") }
-
-    val sdk = apps.probeEnvironment().sdk.coerceIn(21, 35)
-    val index = com.smaliscope.analysis.ApkIndex(apks, sdk)
-    println("已解析 ${index.classCount} 个类")
+    val dbg = com.smaliscope.session.Debugger(cacheDir)
+    dbg.onLog = { println("  · $it") }
+    dbg.loadApp(pkg)
+    val index = dbg.apk ?: run {
+        System.err.println("APK 解析失败")
+        kotlin.system.exitProcess(1)
+    }
     println()
 
     val className = args.getOrNull(1)
@@ -101,11 +97,10 @@ private fun cmdDump(args: List<String>) {
         return
     }
 
-    val fqcn = index.classNames().firstOrNull { it == className || it.endsWith(".$className") }
-        ?: run {
-            System.err.println("未找到类 $className")
-            kotlin.system.exitProcess(1)
-        }
+    val fqcn = dbg.resolveClass(className) ?: run {
+        System.err.println("未找到类 $className")
+        kotlin.system.exitProcess(1)
+    }
 
     val methodName = args.getOrNull(2)
     if (methodName == null) {
@@ -230,63 +225,54 @@ private fun cmdDebug(args: List<String>) {
     val className = args[1]
     val methodName = args[2]
     val steps = args.getOrNull(3)?.toIntOrNull() ?: 14
-    val mode = if (args.getOrNull(4)?.lowercase() == "into")
-        com.smaliscope.stepping.StepMode.INTO else com.smaliscope.stepping.StepMode.OVER
+    val mode = if (args.getOrNull(4)?.lowercase() == "into") "into" else "over"
 
-    val adb = AdbClient()
-    val device = adb.pickDevice()
-    val apps = com.smaliscope.session.DeviceApps(adb, device.serial)
-    val env = apps.probeEnvironment()
-    println("设备: ${device.serial}  接入路径: ${env.path}")
+    val dbg = com.smaliscope.session.Debugger(cacheDir)
+    dbg.onLog = { println("  · $it") }
+    Runtime.getRuntime().addShutdownHook(Thread { runCatching { dbg.close() } })
 
-    val apks = apps.pullApks(pkg, cacheDir)
-    val index = com.smaliscope.analysis.ApkIndex(apks, env.sdk.coerceIn(21, 35))
-    val fqcn = index.classNames().firstOrNull { it == className || it.endsWith(".$className") }
-        ?: run { System.err.println("未找到类 $className"); kotlin.system.exitProcess(1) }
-    val model = index.findMethod(fqcn, methodName)
-        ?: run { System.err.println("未找到方法 $fqcn.$methodName"); kotlin.system.exitProcess(1) }
-    val entryPc = model.instructions.first().dexPc
+    dbg.use {
+        val b = dbg.bootstrap()
+        if (!b.ok) { System.err.println(b.message); kotlin.system.exitProcess(1) }
+        println("设备: ${b.serial}  接入路径: ${b.env?.path}")
+        dbg.loadApp(pkg)
 
-    val suspended = java.util.concurrent.LinkedBlockingQueue<com.smaliscope.session.DebugState>()
-    val session = com.smaliscope.session.DebugSession(adb, device.serial, pkg, index)
-    session.onLog = { println("  · $it") }
-    session.onState = { st -> if (st.status == "suspended") suspended.offer(st) }
+        val index = dbg.apk!!
+        val fqcn = dbg.resolveClass(className)
+            ?: run { System.err.println("未找到类 $className"); kotlin.system.exitProcess(1) }
+        val sig = dbg.resolveMethod(fqcn, methodName, null)
+            ?: run { System.err.println("未找到方法 $fqcn.$methodName"); kotlin.system.exitProcess(1) }
+        val entryPc = index.model(fqcn, methodName, sig)!!.instructions.first().dexPc
 
-    Runtime.getRuntime().addShutdownHook(Thread { runCatching { session.close() } })
-
-    session.use { s ->
-        s.addBreakpoint(fqcn, methodName, model.signature, entryPc)
-        println("断点: $fqcn.$methodName${model.signature} @ dex_pc $entryPc")
+        dbg.addBreakpoint(fqcn, methodName, sig, entryPc)
+        println("断点: $fqcn.$methodName$sig @ dex_pc $entryPc")
         println()
-        s.launchSuspended()
 
-        val first = suspended.poll(40, java.util.concurrent.TimeUnit.SECONDS)
+        val first = dbg.actAndWait(40_000) { dbg.start() }
         if (first == null) {
             System.err.println("等待断点命中超时")
             kotlin.system.exitProcess(1)
         }
-        printStop(first, index, model.signature)
+        printStop(first, index)
 
         repeat(steps) {
-            s.step(mode)
-            val st = suspended.poll(20, java.util.concurrent.TimeUnit.SECONDS)
+            val st = dbg.actAndWait(20_000) { dbg.control(mode) }
             if (st == null) {
                 println("（单步未在预期时间内落点，停止）")
                 return@repeat
             }
-            printStop(st, index, model.signature)
+            printStop(st, index)
         }
 
         println()
-        println("执行轨迹共记录 ${s.timeline.size} 个快照（可用于时间线回放）")
-        s.resume()
+        println("执行轨迹共记录 ${dbg.timeline().size} 个快照（可用于时间线回放）")
+        dbg.control("resume")
     }
 }
 
 private fun printStop(
     st: com.smaliscope.session.DebugState,
     index: com.smaliscope.analysis.ApkIndex,
-    @Suppress("UNUSED_PARAMETER") sig: String,
 ) {
     val f = st.frames.firstOrNull() ?: run { println("（无帧信息）"); return }
     val model = index.model(f.fqcn, f.method, f.signature)
