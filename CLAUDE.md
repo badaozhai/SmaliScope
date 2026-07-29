@@ -62,7 +62,10 @@ python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（�
 
   **判断能否调试的唯一可靠依据是「进程在不在 `adb jdwp` 列表里」，不是任何系统属性。**
   `EnvProbe.summary` 已按此改写——它以前会宣称「所有应用都能直接下断点」，那是对用户说假话。
-  设计方案的 P0/P1 路径都不必再投入；要调第三方应用只能重打包重签名，或 root 下用 Zygisk 逐应用打标记。
+  设计方案的 P0/P1 路径都不必再投入。要调未改造的第三方应用，选定的方案是 root 下用
+  **Zygisk 模块在 fork 时置 `DEBUG_ENABLE_JDWP`**（ROADMAP 第 2 项），原包一字不动；
+  **明确不采用重打包重签名**——改签名会让应用自带的签名校验失效、必须卸载重装丢数据，
+  而且修改的是被研究对象本身。
 
 - **`smali` 3.x 只发布在 Google Maven，Maven Central 上没有**（Central 上的 `org.smali:dexlib2` 停在 2.5.2）。
   `build.gradle.kts` 里的 `google()` 仓库是必需的。

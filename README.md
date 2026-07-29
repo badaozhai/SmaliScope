@@ -82,7 +82,8 @@ adb devices
 > 即便 `ro.debuggable=1` 且 `ro.force.debuggable=1`，未改造的 release 包依然不出现在
 > `adb jdwp` 里，连 `am set-debug-app -w` 也无效。完整实验见
 > [docs/p0-path-findings.md](docs/p0-path-findings.md)。
-> 要调别人的 App，**没有免改造的捷径**，需要重打包重签名（尚未实现）。
+> 要调别人的 App **没有免改造的捷径**：选定的方案是 root 下用 Zygisk 模块在进程启动时
+> 逐应用打标记，原包一字不动（尚未实现）。
 
 ### 2. 构建并安装自带的测试应用
 
@@ -256,8 +257,9 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
 - **让未改造的第三方应用变得可调试**。这是目前最大的缺口，且已实测清楚该走哪条路
   （[docs/p0-path-findings.md](docs/p0-path-findings.md)）：设计方案原本主推的 P0（靠系统属性）
   和 P1（root + `resetprop ro.debuggable`）在现代 Android 上都已失效，
-  真正可行的是 **ARSCLib 改 `android:debuggable` + apksig 重签名 + 重装**，
-  以及 root 下的 **Zygisk 逐应用打 `FLAG_DEBUGGABLE`**。两者都还没做。
+  选定的方案是 root 下用 **Zygisk 模块在进程 fork 时逐应用打 `FLAG_DEBUGGABLE`**——
+  原包一字不动，签名与数据都保留。**不走重打包重签名**：改签名会让应用自带的签名校验失效、
+  必须卸载重装导致数据丢失，而且修改的是被研究对象本身。代价是这条路需要 root。
 - 寄存器写入、条件断点、表达式求值（设计方案里本就列为二期）。
 - jpackage 打包与 platform-tools 自动下载。
 

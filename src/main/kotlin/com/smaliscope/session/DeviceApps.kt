@@ -90,6 +90,11 @@ data class EnvProbe(
      *
      * 所以这里不再按系统属性宣称「所有应用都能调」——真正可靠的判断是
      * 「该应用的进程在不在 adb jdwp 列表里」，那是 [DeviceApps.isDebuggable] 在做的事。
+     *
+     * 让未改造的第三方应用可调，选定的方案是 root 下用 Zygisk 模块在 fork 时
+     * 给目标进程置 DEBUG_ENABLE_JDWP，原包一字不动（见 ROADMAP 第 2 项）。
+     * 明确不采用重打包重签名：改签名会让应用自带的签名校验失效、必须卸载重装丢数据，
+     * 而且修改的是被研究对象本身。
      */
     val path: String get() = when {
         hasSu -> "root"
@@ -105,9 +110,9 @@ data class EnvProbe(
             append("本机 ro.debuggable=1，但实测 Android 14 / 16 上它已不再让普通 release 包变为可调试。")
         }
         if (hasSu) {
-            append("设备已 root，后续可用逐应用打 FLAG_DEBUGGABLE 的方案覆盖其它应用（尚未实现）。")
+            append("设备已 root，后续可装 Zygisk 模块给指定应用打上可调试标记（尚未实现），原包不动。")
         } else {
-            append("要调试未改造的第三方应用，需要重打包并重签名（尚未实现）。")
+            append("要调试未改造的第三方应用需要 root（计划用 Zygisk 模块实现）。")
         }
     }
 }

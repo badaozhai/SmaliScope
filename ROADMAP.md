@@ -43,24 +43,68 @@ M1–M8 已实现并在模拟器上实测通过（见 README）。本文件记�
   仍然成立的是「调你自己的 debug 包零配置」——恰是新手最常见的场景。
 - **P1**（root + `resetprop ro.debuggable 1`）：同样失效，根因不是这个属性。
   root 路径应改为 **Zygisk 逐应用在 fork 时打 `FLAG_DEBUGGABLE`**。
-- **P2**（重打包 + 重签名）：从「最后手段」升为**调试第三方应用的主路径**，
-  优先级相应提到 jpackage 之前。
+- **P2**（重打包 + 重签名）：**不采用**，理由见下一项。
+  取而代之的是 Zygisk 模块，优先级提到 jpackage 之前。
 
 产出：修正了 `EnvProbe` 的错误宣称（它以前会说「所有应用都能直接下断点」）。
 
 ---
 
-## 2. 重打包 + 重签名，让第三方应用可调（原 P2，已升为主路径）
+## 2. Zygisk 模块：逐应用打 FLAG_DEBUGGABLE
 
-第 1 项证伪了所有「免改造」的路子之后，这成了调试第三方应用的**唯一**可行方案，
-因此从原来的最后一项提到这里。
+第 1 项证伪了所有「靠系统属性免改造」的路子之后，让第三方应用可调只剩两个选择：
+**改 APK**（重打包 + 重签名）或 **改进程启动时的 runtime flags**（Zygisk 模块）。
+选后者。
 
-ARSCLib 改 `android:debuggable`（resource id `0x0101000f`）→ apksig 重签名 → `adb install -r`。
-签名变化时要先卸载，且要处理 App 自带签名校验的情况（诚实降级并说明原因，别假装成功）。
+### 为什么不走重签名
 
-### 验收
+- **签名一变，应用自带的签名校验就失效**——国产 App 里这类校验极其普遍，
+  改完往往直接闪退或走进降级逻辑，你调的已经不是原来那个程序了；
+- **签名变了必须卸载重装，用户数据全丢**，无法在真实数据状态下复现问题；
+- **它修改的是被研究对象本身**。逆向时这等于污染证据：你看到的 dex 偏移、
+  类加载顺序、乃至反调试分支都可能因为改造而与原包不同；
+- Play 集成 / Play Integrity 之类的链路一并失效，很多 App 会因此行为改变。
 
-在一台非 root 真机上，把一个未改造的 App 变成可调试并完成一次断点命中。
+一句话：为了看清楚一个东西而先把它改掉，方法本身就不成立。
+
+### 为什么 Zygisk 是对的
+
+原包一字不动——签名、数据、更新链路全部保留，观察对象就是它本来的样子。
+而且只对目标应用生效，不必动全局 `ro.debuggable`（那个属性既是反调试检测最爱读的，
+第 1 项也已实测证明它根本不起作用）。
+
+机制正好对上第 1 项的实测结论：**进程能否被 JDWP 调试，取决于 zygote fork 时的
+runtime flags**，而 Zygisk 的 `preAppSpecialize` 拿到的 `AppSpecializeArgs` 里
+`runtime_flags` 是可写的。对目标包置位即可：
+
+```cpp
+// com.android.internal.os.Zygote
+//   DEBUG_ENABLE_JDWP      = 1        让 adbconnection 起来，进程才会出现在 adb jdwp
+//   DEBUG_JAVA_DEBUGGABLE  = 1 << 8   让 ART 以可调试模式运行（断点所需的 deopt 靠它）
+void preAppSpecialize(AppSpecializeArgs *args) {
+    if (matchesTarget(args->nice_name)) {
+        *args->runtime_flags |= DEBUG_ENABLE_JDWP | DEBUG_JAVA_DEBUGGABLE;
+    }
+}
+```
+
+### 待办
+
+- 写 Zygisk 模块（C++），目标包名从一个配置文件读，避免给所有应用打标记；
+- 工具侧：探测 Magisk/Zygisk 是否就位、模块是否安装、目标包是否已在名单里，
+  没有就给出中文引导（安装模块 → 加包名 → 强杀应用重启），而不是丢一句「不可调试」；
+- 验收：在 root 设备上，对一个**未经任何改造**的第三方 release 包完成
+  「下断点 → 命中 → 读寄存器」，且该应用的签名与数据均未变动。
+
+### 代价要说清楚
+
+这条路**需要 root**。所以能力边界是：
+
+- 调**你自己开发的** debug 包 → 零配置，不需要 root（新手最常见的场景，产品主线）；
+- 调**别人的** release 包 → 需要 root + 本模块。
+
+放弃重签名意味着放弃「非 root 真机也能调第三方应用」这个场景。这是有意识的取舍：
+那条路能跑通，但跑通之后你研究的已经不是原来那个 App 了。
 
 ---
 
