@@ -53,9 +53,16 @@ python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（�
   而 `-g:lines,source`（**javac 默认**、也是多数 release 构建的选择，为了保留崩溃栈行号）
   会连带写入覆盖整个方法的参数类型，恰好落在最差的一档。改动读寄存器路径前先读那份实测报告。
 
-- **本机模拟器镜像是 Play 商店镜像**：`ro.debuggable=0` 且 `adb root` 不可用，
-  因此只有自带 `android:debuggable="true"` 的应用（即 `testapp/`）能调。
-  要验证「任意应用零配置可调」的 P0 路径，需要另外装一个非 Play 系统镜像。
+- **「非 Play 镜像 → 任意应用可调」这个广为流传的说法在现代 Android 上是错的。**
+  已逐条实测证伪（Android 14 google_apis userdebug 与 Android 16），见
+  [docs/p0-path-findings.md](docs/p0-path-findings.md)：`ro.debuggable=1`、
+  再加 `ro.force.debuggable=1`、重装应用、乃至 `am set-debug-app -w`，
+  未带 `android:debuggable="true"` 的 release 包统统不出现在 `adb jdwp` 里；
+  而同一台设备上带该标记的应用立刻可调。
+
+  **判断能否调试的唯一可靠依据是「进程在不在 `adb jdwp` 列表里」，不是任何系统属性。**
+  `EnvProbe.summary` 已按此改写——它以前会宣称「所有应用都能直接下断点」，那是对用户说假话。
+  设计方案的 P0/P1 路径都不必再投入；要调第三方应用只能重打包重签名，或 root 下用 Zygisk 逐应用打标记。
 
 - **`smali` 3.x 只发布在 Google Maven，Maven Central 上没有**（Central 上的 `org.smali:dexlib2` 停在 2.5.2）。
   `build.gradle.kts` 里的 `google()` 仓库是必需的。

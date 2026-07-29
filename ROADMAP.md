@@ -28,26 +28,43 @@ M1–M8 已实现并在模拟器上实测通过（见 README）。本文件记�
 
 ---
 
-## 1. 验证 P0「任意应用零配置可调」路径
+## 1. ~~验证 P0「任意应用零配置可调」~~ ✅ 已完成（结论：此路不通）
 
-目前这条路径只是代码里探测得出的分支，**从未真正执行过** —— 本机只有 Play 商店镜像
-（`ro.debuggable=0` 且不可 root），只有自带 debuggable 标记的应用能调。
+**设计方案的 P0 前提被实测证伪**，完整实验见 [docs/p0-path-findings.md](docs/p0-path-findings.md)。
 
-### 怎么做
+装了非 Play 的 android-34 google_apis 镜像（`ro.debuggable=1`、`userdebug`、`adb root` 可用），
+拿未经改造的正规 release 包（Element X，R8 混淆）逐条排除：加 `ro.force.debuggable=1`、
+卸载重装、`am set-debug-app -w`——**全部无效**，它始终不出现在 `adb jdwp` 里；
+而同一台设备上自带 `android:debuggable="true"` 的应用立刻可调（对照组成立）。
 
-装一个非 Play 系统镜像（Google APIs，默认 `ro.debuggable=1`），建 AVD，
-用**任意一个第三方 App**（不是我们自己写的测试应用）走完整流程。
+**路线重排：**
 
-本机没有 `sdkmanager`，需要先装 cmdline-tools。
+- **P0**（靠系统属性零配置调任意应用）：此路不通，不再投入。
+  仍然成立的是「调你自己的 debug 包零配置」——恰是新手最常见的场景。
+- **P1**（root + `resetprop ro.debuggable 1`）：同样失效，根因不是这个属性。
+  root 路径应改为 **Zygisk 逐应用在 fork 时打 `FLAG_DEBUGGABLE`**。
+- **P2**（重打包 + 重签名）：从「最后手段」升为**调试第三方应用的主路径**，
+  优先级相应提到 jpackage 之前。
 
-### 验收
-
-在非 Play 镜像上，对一个未经改造的第三方 App 完成「选应用 → 下断点 → 命中 → 单步读寄存器」。
-顺带能拿到第 0 项在真实 release APK 上的数据。
+产出：修正了 `EnvProbe` 的错误宣称（它以前会说「所有应用都能直接下断点」）。
 
 ---
 
-## 2. jpackage 打包
+## 2. 重打包 + 重签名，让第三方应用可调（原 P2，已升为主路径）
+
+第 1 项证伪了所有「免改造」的路子之后，这成了调试第三方应用的**唯一**可行方案，
+因此从原来的最后一项提到这里。
+
+ARSCLib 改 `android:debuggable`（resource id `0x0101000f`）→ apksig 重签名 → `adb install -r`。
+签名变化时要先卸载，且要处理 App 自带签名校验的情况（诚实降级并说明原因，别假装成功）。
+
+### 验收
+
+在一台非 root 真机上，把一个未改造的 App 变成可调试并完成一次断点命中。
+
+---
+
+## 3. jpackage 打包
 
 面向新手却要求先装 JDK 和 Gradle 是自相矛盾的。
 
@@ -59,19 +76,6 @@ jpackage 出三平台安装包并内嵌 JRE；首次运行自动下载 platform-
 ### 验收
 
 在一台没装 JDK / Android SDK 的干净机器上双击安装、双击运行，能连上模拟器。
-
----
-
-## 3. P2 非 root 重打包回退
-
-工作量最大、受益人群最窄，所以排在后面，但这是非 root 真机用户唯一的路。
-
-ARSCLib 改 `android:debuggable`（resource id `0x0101000f`）→ apksig 重签名 → `adb install -r`。
-签名变化时要先卸载，且要处理 App 自带签名校验的情况（诚实降级并说明原因，别假装成功）。
-
-### 验收
-
-在一台非 root 真机上，把一个未改造的 App 变成可调试并完成一次断点命中。
 
 ---
 

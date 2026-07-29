@@ -73,12 +73,16 @@ CFG 上「走过的路」着色，另有调用栈、对象图和可拖动回看�
 adb devices
 ```
 
-**关于「哪些应用能调」**：JDWP 只对 debuggable 的进程开放，有两条路——
+**关于「哪些应用能调」**：JDWP 只对 debuggable 的进程开放。
+**能调的是自身带 `android:debuggable="true"` 的应用**——也就是你自己开发的 debug 包，
+这恰好是新手最常见的场景。工具的应用列表里带 ● 的就是当前可调的。
 
-- 设备 `ro.debuggable=1`（AVD 的**非 Play 镜像**、userdebug/eng ROM）→ 所有应用都能调，真正的零配置；
-- 设备 `ro.debuggable=0`（Play 商店镜像、市售手机）→ 只有自身带 `android:debuggable="true"` 的应用能调。
-
-工具会自动探测并在界面上说明当前属于哪种情况。
+> ⚠️ 网上大量教程说「用非 Play 镜像 / `ro.debuggable=1` 就能调任意应用」，
+> **这在现代 Android 上已经不成立**。我在 Android 14 与 16 上逐条验证过：
+> 即便 `ro.debuggable=1` 且 `ro.force.debuggable=1`，未改造的 release 包依然不出现在
+> `adb jdwp` 里，连 `am set-debug-app -w` 也无效。完整实验见
+> [docs/p0-path-findings.md](docs/p0-path-findings.md)。
+> 要调别人的 App，**没有免改造的捷径**，需要重打包重签名（尚未实现）。
 
 ### 2. 构建并安装自带的测试应用
 
@@ -175,7 +179,7 @@ SmaliScope 实现了标准 **MCP**（Model Context Protocol），可以让 agent
 
 ```bash
 smaliscope config llm.apiKey  <你的key>
-smaliscope config llm.baseUrl https://api.x.ai    # 默认 https://claudegpt.org
+smaliscope config llm.baseUrl https://claudegpt.org    # 默认 https://claudegpt.org
 smaliscope config llm.model   grok-4
 smaliscope config --test                          # 测连通性
 ```
@@ -249,7 +253,11 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
 
 ## 尚未实现
 
-- **P1 / P2 接入路径**：目前只做**探测与说明**（告诉你当前设备属于哪种情况、为什么某些应用不可调），没有实现「root 下自动 resetprop / 装 Magisk 模块」和「非 root 重打包 + 重签名」这两条自动准备路径。因此在 `ro.debuggable=0` 的设备上，只能调试自身带 debuggable 标记的应用。
+- **让未改造的第三方应用变得可调试**。这是目前最大的缺口，且已实测清楚该走哪条路
+  （[docs/p0-path-findings.md](docs/p0-path-findings.md)）：设计方案原本主推的 P0（靠系统属性）
+  和 P1（root + `resetprop ro.debuggable`）在现代 Android 上都已失效，
+  真正可行的是 **ARSCLib 改 `android:debuggable` + apksig 重签名 + 重装**，
+  以及 root 下的 **Zygisk 逐应用打 `FLAG_DEBUGGABLE`**。两者都还没做。
 - 寄存器写入、条件断点、表达式求值（设计方案里本就列为二期）。
 - jpackage 打包与 platform-tools 自动下载。
 

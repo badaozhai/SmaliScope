@@ -81,17 +81,33 @@ data class EnvProbe(
     val isEmulator: Boolean,
     val hasSu: Boolean,
 ) {
-    /** P0/P1/P2：路径只决定「怎么让进程可调」，不改变「怎么调」。 */
+    /**
+     * ⚠️ 设计方案假设「非 Play 镜像 ro.debuggable=1 → 所有应用天生可 JDWP 调（P0 零配置）」。
+     * **这个前提在现代 Android 上不成立**，已实测证伪，见 docs/p0-path-findings.md：
+     * 在 Android 14 的 google_apis userdebug 镜像上，即使 `ro.debuggable=1` 且
+     * `ro.force.debuggable=1`，未带 `android:debuggable="true"` 的 release 包依然不出现在
+     * `adb jdwp` 里，连 `am set-debug-app -w` 也无法让它可调。Android 16 上同样如此。
+     *
+     * 所以这里不再按系统属性宣称「所有应用都能调」——真正可靠的判断是
+     * 「该应用的进程在不在 adb jdwp 列表里」，那是 [DeviceApps.isDebuggable] 在做的事。
+     */
     val path: String get() = when {
-        roDebuggable -> "P0"
-        hasSu -> "P1"
-        else -> "P2"
+        hasSu -> "root"
+        roDebuggable -> "userdebug"
+        else -> "user"
     }
 
-    val summary: String get() = when {
-        roDebuggable -> "设备已全局可调试，所有应用都能直接下断点，无需任何准备。"
-        hasSu -> "设备已 root 但未全局开放调试，可由工具自动准备（需重启一次）。"
-        else -> "设备既未开放调试也无 root：只有自身带 debuggable 标记的应用可以调试。" +
-            "新手建议改用模拟器的非 Play 镜像（Google APIs），那种镜像默认全局可调试。"
+    val summary: String get() = buildString {
+        append("只有自身带 debuggable 标记的应用可以调试——应用列表里带 ● 的就是。")
+        if (roDebuggable) {
+            // 只声称实测过的版本。旧 Android 上 ro.debuggable=1 确实曾让所有应用可调，
+            // 具体从哪一版开始变的没有实测，不写死。
+            append("本机 ro.debuggable=1，但实测 Android 14 / 16 上它已不再让普通 release 包变为可调试。")
+        }
+        if (hasSu) {
+            append("设备已 root，后续可用逐应用打 FLAG_DEBUGGABLE 的方案覆盖其它应用（尚未实现）。")
+        } else {
+            append("要调试未改造的第三方应用，需要重打包并重签名（尚未实现）。")
+        }
     }
 }
