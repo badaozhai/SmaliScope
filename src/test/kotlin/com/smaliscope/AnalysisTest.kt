@@ -116,6 +116,20 @@ class AnalysisTest {
     }
 
     @Test
+    fun `既读又写同一个寄存器的指令，读边不能丢`() {
+        // 这三类都是「vA 既是源又是汇」，靠「全部引用寄存器减去写入的」来算读集会把读边吃掉：
+        //   add-int/lit8 v0, v0, 1   —— i = i + 1
+        //   add-int/2addr v1, v2     —— v1 = v1 + v2
+        //   check-cast   p1, LFoo;   —— p1 = (Foo) p1
+        // 前两个已在 testapp 上验证，check-cast 是在真实混淆应用上发现的。
+        assertTrue(com.android.tools.smali.dexlib2.Opcode.CHECK_CAST.setsRegister(),
+            "dexlib2 把 check-cast 标为 SETS_REGISTER，所以必须显式把它的 A 位也算作读")
+        assertTrue(com.android.tools.smali.dexlib2.Opcode.ADD_INT_2ADDR.setsRegister())
+        assertTrue(com.android.tools.smali.dexlib2.Opcode.ADD_INT_2ADDR.name.endsWith("/2addr"))
+        assertTrue(com.android.tools.smali.dexlib2.Opcode.ADD_INT_LIT8.setsRegister())
+    }
+
+    @Test
     fun `JSON 转义不会产出非法文本`() {
         assertEquals("\"a\\\"b\"", Json.str("a\"b"))
         assertEquals("\"a\\\\b\"", Json.str("a\\b"))

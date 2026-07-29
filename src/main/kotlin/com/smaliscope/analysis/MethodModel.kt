@@ -395,9 +395,14 @@ private fun sourceRegisters(insn: Instruction): List<Int> {
             if (insn is ThreeRegisterInstruction) out += insn.registerC
             if (insn is TwoRegisterInstruction) out += insn.registerB
             if (insn is OneRegisterInstruction) {
-                // A 位在不写入时是读（如 iput/aput/if-*/return），
-                // 写入时若为 /2addr 形式（vA = vA op vB）也仍然是读。
-                if (!insn.opcode.setsRegister() || insn.opcode.name.endsWith("/2addr")) {
+                // A 位在不写入时是读（如 iput/aput/if-*/return）；
+                // 写入时仍然算读的有两种：
+                //   - /2addr 形式：vA = vA op vB
+                //   - check-cast：vA = (Type) vA。dexlib2 把它标为 SETS_REGISTER
+                //     （因为校验器会收窄该寄存器的类型），但它同时也是源操作数，
+                //     漏掉这条读边会让数据流箭头断在类型转换处。
+                val op = insn.opcode
+                if (!op.setsRegister() || op.name.endsWith("/2addr") || op == Opcode.CHECK_CAST) {
                     out += insn.registerA
                 }
             }
