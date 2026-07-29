@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmaliScope · smali 指令级调试器</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="brand">Smali<span>Scope</span></div>
+    <div class="env" id="envInfo">正在探测设备…</div>
+    <div class="spacer"></div>
+    <select id="appSelect" title="选择要调试的应用"><option>加载中…</option></select>
+    <button id="loadApp" class="primary">载入应用</button>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">未连接</span></div>
+  </header>
+
+  <div id="hintBar" class="hint hidden"></div>
+
+  <main>
+    <aside class="pane left">
+      <div class="pane-head">类与方法</div>
+      <input id="classFilter" class="filter" placeholder="筛选类名…">
+      <div class="scroll" id="classList"></div>
+      <div class="pane-head sub">方法</div>
+      <div class="scroll" id="methodList"></div>
+    </aside>
+
+    <section class="pane center">
+      <div class="pane-head">
+        <span id="methodTitle">选一个方法开始</span>
+        <span class="legend">
+          <i class="lg-read"></i>读 <i class="lg-write"></i>写 <i class="lg-cur"></i>当前
+        </span>
+      </div>
+      <div class="scroll code" id="smali">
+        <div class="empty">左侧选择一个类，再选一个方法，就能看到它的 smali 指令。<br>
+          点击行号左侧的圆点即可下断点。</div>
+      </div>
+    </section>
+
+    <aside class="pane right">
+      <div class="pane-head">寄存器 <span class="sub-note" id="regNote"></span></div>
+      <div id="dataflow" class="dataflow hidden"></div>
+      <div class="scroll" id="registers">
+        <div class="empty">命中断点后，这里会显示每个寄存器的类型和值，<br>并把这一步中发生变化的寄存器高亮出来。</div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="bottom">
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-panel="cfg">控制流图</button>
+      <button class="tab" data-panel="java">Java 视图</button>
+      <button class="tab" data-panel="stack">调用栈</button>
+      <button class="tab" data-panel="object">对象图</button>
+      <button class="tab" data-panel="timeline">执行时间线</button>
+      <button class="tab" data-panel="bp">断点</button>
+      <button class="tab" data-panel="log">日志</button>
+    </div>
+    <div class="panels">
+      <div class="panel active" id="panel-cfg"><div class="empty">选定方法后显示控制流图；执行过的块会被着色。</div></div>
+      <div class="panel" id="panel-java"><div class="empty">选定一个类后，这里显示它反编译出的 Java 源码，用来看懂逻辑；断点仍然下在 smali 一侧。</div></div>
+      <div class="panel" id="panel-stack"><div class="empty">命中断点后显示调用栈。</div></div>
+      <div class="panel" id="panel-object"><div class="empty">在寄存器面板点击一个对象即可展开它的字段。</div></div>
+      <div class="panel" id="panel-timeline"><div class="empty">单步过程会被逐步记录，可拖动回看任意一步。</div></div>
+      <div class="panel" id="panel-bp"><div class="empty">尚未设置断点。</div></div>
+      <div class="panel" id="panel-log"><div id="logList"></div></div>
+    </div>
+  </div>
+
+  <footer id="controls">
+    <button id="btnStart" class="primary">开始调试</button>
+    <span class="sep"></span>
+    <button data-action="resume" disabled>▶ 继续</button>
+    <button data-action="into" disabled>↓ 步入</button>
+    <button data-action="over" disabled>→ 步过</button>
+    <button data-action="out" disabled>↑ 步出</button>
+    <span class="sep"></span>
+    <button data-action="stop" disabled>■ 停止</button>
+    <div class="spacer"></div>
+    <div id="deopt" class="deopt hidden">已切换为解释执行，应用会变慢——这是下断点后的正常现象</div>
+  </footer>
+
+  <div id="tip" class="tip hidden"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+build/
+.gradle/
+testapp/build/
+*.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store

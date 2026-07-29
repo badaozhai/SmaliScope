@@ -1,0 +1,232 @@
+package com.smaliscope.adb
+
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketTimeoutException
+
+/**
+ * 直连 adb server（默认 127.0.0.1:5037）走二进制协议，不用 Runtime.exec 解析文本输出。
+ *
+ * 请求格式：4 位十六进制长度 + ASCII 载荷；响应先 4 字节 "OKAY"/"FAIL"。
+ * host: 开头的请求由 server 处理；选中 transport 之后，同一条 socket 上的后续请求发往设备。
+ */
+class AdbClient(
+    private val host: String = "127.0.0.1",
+    private val port: Int = 5037,
+) {
+
+    data class Device(val serial: String, val state: String) {
+        val isOnline: Boolean get() = state == "device"
+        val isEmulator: Boolean get() = serial.startsWith("emulator-")
+    }
+
+    // 不要写成 Socket().apply { connect(InetSocketAddress(host, port), …) }：
+    // apply 块里的 port 会解析到 Socket.getPort()（未连接时为 0），而不是本类的字段。
+    private fun open(timeoutMs: Int = 10_000): Socket {
+        val sock = Socket()
+        sock.connect(InetSocketAddress(host, port), timeoutMs)
+        sock.tcpNoDelay = true
+        return sock
+    }
+
+    private fun request(out: OutputStream, payload: String) {
+        val body = payload.toByteArray(Charsets.UTF_8)
+        out.write(String.format("%04x", body.size).toByteArray(Charsets.US_ASCII))
+        out.write(body)
+        out.flush()
+    }
+
+    private fun readExactly(input: InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var read = 0
+        while (read < n) {
+            val r = input.read(buf, read, n - read)
+            if (r < 0) throw IOException("adb 连接提前结束（已读 $read/$n 字节）")
+            read += r
+        }
+        return buf
+    }
+
+    /** 读 OKAY/FAIL；FAIL 时把错误信息读出来抛出。 */
+    private fun expectOkay(input: InputStream, what: String) {
+        val status = String(readExactly(input, 4), Charsets.US_ASCII)
+        when (status) {
+            "OKAY" -> return
+            "FAIL" -> {
+                val len = String(readExactly(input, 4), Charsets.US_ASCII).toInt(16)
+                val msg = String(readExactly(input, len), Charsets.UTF_8)
+                throw IOException("adb 拒绝「$what」: $msg")
+            }
+            else -> throw IOException("adb 响应异常「$what」: $status")
+        }
+    }
+
+    /** 读 4 位十六进制长度前缀的数据块。 */
+    private fun readBlock(input: InputStream): String {
+        val len = String(readExactly(input, 4), Charsets.US_ASCII).toInt(16)
+        return String(readExactly(input, len), Charsets.UTF_8)
+    }
+
+    /** adb server 版本，用来确认 server 在跑。 */
+    fun serverVersion(): Int = open().use { sock ->
+        request(sock.getOutputStream(), "host:version")
+        expectOkay(sock.getInputStream(), "host:version")
+        readBlock(sock.getInputStream()).trim().toInt(16)
+    }
+
+    fun devices(): List<Device> = open().use { sock ->
+        request(sock.getOutputStream(), "host:devices")
+        expectOkay(sock.getInputStream(), "host:devices")
+        readBlock(sock.getInputStream()).lineSequence()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split('\t', limit = 2)
+                if (parts.size == 2) Device(parts[0].trim(), parts[1].trim()) else null
+            }
+            .toList()
+    }
+
+    /** 选一台在线设备：优先模拟器（设计方案 §2.3 的 P0 零配置路径）。 */
+    fun pickDevice(preferredSerial: String? = null): Device {
+        val list = devices().filter { it.isOnline }
+        if (list.isEmpty()) throw IOException("未发现在线设备，请先启动模拟器或连接手机后重试")
+        preferredSerial?.let { want ->
+            return list.firstOrNull { it.serial == want }
+                ?: throw IOException("未找到设备 $want，当前在线: ${list.joinToString { it.serial }}")
+        }
+        return list.firstOrNull { it.isEmulator } ?: list.first()
+    }
+
+    private fun transport(sock: Socket, serial: String) {
+        request(sock.getOutputStream(), "host:transport:$serial")
+        expectOkay(sock.getInputStream(), "transport:$serial")
+    }
+
+    /** 在设备上执行 shell 命令，返回合并后的输出。 */
+    fun shell(serial: String, command: String, timeoutMs: Int = 30_000): String =
+        open().use { sock ->
+            sock.soTimeout = timeoutMs
+            transport(sock, serial)
+            request(sock.getOutputStream(), "shell:$command")
+            expectOkay(sock.getInputStream(), "shell")
+            val buf = ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            try {
+                while (true) {
+                    val n = sock.getInputStream().read(chunk)
+                    if (n < 0) break
+                    buf.write(chunk, 0, n)
+                }
+            } catch (_: SocketTimeoutException) {
+                // shell 命令有输出但不结束时按已读内容返回
+            }
+            buf.toString("UTF-8")
+        }
+
+    /**
+     * 列出可调试进程的 pid。
+     *
+     * `jdwp` 是一条长连接命令：server 会持续推送 pid 列表且不主动关闭，
+     * 因此按一个短窗口收集后关闭 socket。
+     */
+    fun jdwpPids(serial: String, windowMs: Int = 1200): List<Int> = open().use { sock ->
+        sock.soTimeout = windowMs
+        transport(sock, serial)
+        request(sock.getOutputStream(), "jdwp")
+        expectOkay(sock.getInputStream(), "jdwp")
+        val buf = ByteArrayOutputStream()
+        val chunk = ByteArray(4096)
+        try {
+            while (true) {
+                val n = sock.getInputStream().read(chunk)
+                if (n < 0) break
+                buf.write(chunk, 0, n)
+            }
+        } catch (_: SocketTimeoutException) {
+            // 预期：窗口到点就停
+        }
+        buf.toString("UTF-8").lineSequence()
+            .mapNotNull { it.trim().toIntOrNull() }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+
+    /** 建立端口转发 tcp:local → jdwp:pid，返回本地端口。 */
+    fun forwardJdwp(serial: String, pid: Int, localPort: Int = freePort()): Int {
+        open().use { sock ->
+            request(sock.getOutputStream(), "host-serial:$serial:forward:tcp:$localPort;jdwp:$pid")
+            val input = sock.getInputStream()
+            expectOkay(input, "forward tcp:$localPort→jdwp:$pid")
+            // forward 会回两个 OKAY：第一个是命令被接受，第二个是转发建立成功。
+            runCatching { expectOkay(input, "forward 确认") }
+        }
+        return localPort
+    }
+
+    fun removeForward(serial: String, localPort: Int) {
+        runCatching {
+            open().use { sock ->
+                request(sock.getOutputStream(), "host-serial:$serial:killforward:tcp:$localPort")
+                runCatching { expectOkay(sock.getInputStream(), "killforward") }
+            }
+        }
+    }
+
+    /** 从设备拉文件到本地。走 sync 服务的 RECV 协议。 */
+    fun pull(serial: String, remotePath: String, localFile: java.io.File) {
+        open(30_000).use { sock ->
+            sock.soTimeout = 120_000
+            transport(sock, serial)
+            request(sock.getOutputStream(), "sync:")
+            expectOkay(sock.getInputStream(), "sync")
+
+            val out = sock.getOutputStream()
+            val input = sock.getInputStream()
+            val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
+            out.write("RECV".toByteArray(Charsets.US_ASCII))
+            out.write(le32(pathBytes.size))
+            out.write(pathBytes)
+            out.flush()
+
+            localFile.parentFile?.mkdirs()
+            localFile.outputStream().buffered().use { fileOut ->
+                while (true) {
+                    val id = String(readExactly(input, 4), Charsets.US_ASCII)
+                    when (id) {
+                        "DATA" -> {
+                            val n = readLe32(readExactly(input, 4))
+                            fileOut.write(readExactly(input, n))
+                        }
+                        "DONE" -> {
+                            readExactly(input, 4)
+                            return@use
+                        }
+                        "FAIL" -> {
+                            val n = readLe32(readExactly(input, 4))
+                            throw IOException("拉取 $remotePath 失败: ${String(readExactly(input, n))}")
+                        }
+                        else -> throw IOException("sync 协议异常: $id")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun le32(v: Int) = byteArrayOf(
+        v.toByte(), (v ushr 8).toByte(), (v ushr 16).toByte(), (v ushr 24).toByte()
+    )
+
+    private fun readLe32(b: ByteArray): Int =
+        (b[0].toInt() and 0xff) or ((b[1].toInt() and 0xff) shl 8) or
+            ((b[2].toInt() and 0xff) shl 16) or ((b[3].toInt() and 0xff) shl 24)
+
+    companion object {
+        fun freePort(): Int = ServerSocket(0).use { it.localPort }
+    }
+}
