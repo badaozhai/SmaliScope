@@ -80,9 +80,23 @@ async function boot() {
       sel.appendChild(o);
     }
     if (!sorted.length) sel.appendChild(el('option', null, '设备上没有第三方应用'));
+
+    // 刷新页面时恢复现场：状态本来只从 SSE 推来，新页面在下一次事件之前是空的。
+    if (b.session && b.session.pkg) await restore(b.session.pkg);
   } catch (e) {
     hint('无法连接设备：' + e.message, 'error');
   }
+}
+
+async function restore(pkg) {
+  S.pkg = pkg;
+  const sel = $('#appSelect');
+  for (const o of sel.options) if (o.value === pkg) sel.value = pkg;
+  await loadClasses();
+  await refreshBps();
+  const st = await get('/api/state').catch(() => null);
+  // applyState 在挂起时会自动把代码视图切到当前所在的方法。
+  if (st) applyState(st);
 }
 
 async function loadApp() {
@@ -134,10 +148,22 @@ async function loadJava(cls) {
 }
 
 async function selectClass(cls, node) {
-  $$('#classList .item').forEach(n => n.classList.remove('active'));
-  if (node) node.classList.add('active');
+  highlightClass(cls, node);
   S.cls = cls;
   loadJava(cls);
+  await loadMethods(cls);
+}
+
+function highlightClass(cls, node) {
+  const target = node || $$('#classList .item').find(n => n.textContent === cls);
+  $$('#classList .item').forEach(n => n.classList.remove('active'));
+  if (target) {
+    target.classList.add('active');
+    target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+async function loadMethods(cls) {
   const ms = await get('/api/methods', { class: cls });
   const box = $('#methodList');
   box.innerHTML = '';
@@ -145,15 +171,41 @@ async function selectClass(cls, node) {
     const item = el('div', 'item');
     item.appendChild(document.createTextNode(m.name));
     item.appendChild(el('span', 'muted', `${m.signature} · ${m.insnCount} 条`));
+    item.dataset.key = m.name + m.signature;
     clickable(item, `${m.name}${m.signature}`, () => selectMethod(m.name, m.signature, item));
     box.appendChild(item);
   }
 }
 
 async function selectMethod(name, sig, node) {
-  $$('#methodList .item').forEach(n => n.classList.remove('active'));
-  if (node) node.classList.add('active');
+  highlightMethod(name, sig, node);
   S.method = name; S.sig = sig;
+  await refreshMethodView();
+}
+
+function highlightMethod(name, sig, node) {
+  const target = node || $$('#methodList .item').find(n => n.dataset.key === name + sig);
+  $$('#methodList .item').forEach(n => n.classList.remove('active'));
+  if (target) {
+    target.classList.add('active');
+    target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+/**
+ * 跳到某个类的某个方法，并把左侧两栏的选中状态同步过去。
+ * 命中断点落在别的方法、或刷新页面恢复现场时都走这里——
+ * 只换中间的代码而不动左栏，会让人不知道自己现在在哪。
+ */
+async function navigateTo(fqcn, method, sig) {
+  const classChanged = S.cls !== fqcn;
+  S.cls = fqcn; S.method = method; S.sig = sig;
+  if (classChanged) {
+    highlightClass(fqcn, null);
+    loadJava(fqcn);
+    await loadMethods(fqcn);
+  }
+  highlightMethod(method, sig, null);
   await refreshMethodView();
 }
 
@@ -448,8 +500,7 @@ function renderStack() {
 }
 
 async function openMethodFromFrame(f) {
-  S.cls = f.fqcn; S.method = f.method; S.sig = f.signature;
-  await refreshMethodView();
+  await navigateTo(f.fqcn, f.method, f.signature);
 }
 
 async function expandObject(id) {

@@ -4,6 +4,13 @@
 
 内核：JDWP 指令级断点（`Location.index = dex_pc`）+ dexlib2 静态解析与类型推导 + jadx Java 视图。
 
+![SmaliScope 工作台](docs/images/workbench.png)
+
+> 断点停在 `mul-int v2, p1, v1`。右上角的数据流条写着 `v1=1、p1=3 ──▶ v2`，
+> 寄存器面板里参与运算的 `v1`（读，绿）和 `v2`（写，橙）被标了出来，
+> `p0` 带着 `this` 标记，底部控制流图里走过的块着蓝、当前块黄框。
+> 注意 `v2` 显示的是「此处不可用」而不是 0 —— 读不出来时会说实话。
+
 ## 它解决什么问题
 
 现有工具对新手都不友好：smalidea 配置繁琐、报错晦涩；JADX/JEB 只能看静态；Frida 是方法级 hook，
@@ -39,6 +46,20 @@ SmaliScope 只做一件事，做到新手能用：**在任意一条 smali 指令
 
 Web 工作台把同样的过程做成可视化：执行指针跟着指令走，变化的寄存器脉冲高亮，
 CFG 上「走过的路」着色，另有调用栈、对象图和可拖动回看的执行时间线。
+
+### 对象图：点开引用型寄存器，逐层下钻
+
+![对象图](docs/images/object-graph.png)
+
+### 执行时间线：拖回去看任意一步的寄存器状态
+
+![执行时间线](docs/images/timeline.png)
+
+这是对**已记录快照的回放**，不是让程序倒着执行——JDWP 不支持逆执行，界面上也直说了这一点。
+
+### Java 视图：用 jadx 看懂逻辑，断点仍下在 smali 侧
+
+![Java 视图](docs/images/java-view.png)
 
 ---
 
@@ -216,6 +237,8 @@ src/main/resources/web/    前端（无框架，原生 JS/CSS/SVG）
 testapp/                   自带的 debuggable 测试应用（aapt2 + javac + d8 手工构建）
 scripts/e2e.py             Web 侧端到端回归（需设备）
 scripts/mcp-e2e.py         MCP 侧端到端回归（需设备）
+scripts/shots.py           重新生成 README 里的界面截图（Chrome headless + CDP）
+docs/images/               界面截图
 ```
 
 设计细节见 [`Smali断点调试器-系统设计方案.md`](Smali断点调试器-系统设计方案.md)，

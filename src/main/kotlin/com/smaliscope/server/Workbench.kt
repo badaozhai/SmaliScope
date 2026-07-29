@@ -105,6 +105,14 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
                     "debuggable" to Json.bool(it.debuggable),
                 )
             }),
+            // 已有会话时一并回给前端，刷新页面才能恢复现场——
+            // 状态本来只从 SSE 推来，新打开的页面在下一次事件之前是空的。
+            "session" to (dbg.pkg?.let {
+                Json.obj(
+                    "pkg" to Json.str(it),
+                    "classCount" to Json.num(dbg.apk?.classCount ?: 0),
+                )
+            } ?: "null"),
         )
     }
 
