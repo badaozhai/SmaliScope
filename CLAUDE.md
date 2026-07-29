@@ -14,13 +14,15 @@ M1–M8 已全部实现并在模拟器上实测通过，M9 只差打包发布。
 ./gradlew installDist                              # 构建（产物在 build/install/smaliscope/）
 ./gradlew test                                     # 单元测试（不需要设备）
 ./testapp/build.sh                                 # 构建自带的 debuggable 测试 APK
-python3 scripts/e2e.py                             # 端到端回归（需设备 + 工作台已在 8777 端口跑）
+python3 scripts/e2e.py                             # Web 侧端到端回归（需设备 + 工作台已启动）
+python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（需设备，自己拉起进程）
 ```
 
 跑起来（**不要用 `./gradlew run`**，见下方「Gradle daemon 会继承沙箱网络限制」）：
 
 ```bash
 ./build/install/smaliscope/bin/smaliscope serve            # Web 工作台
+./build/install/smaliscope/bin/smaliscope mcp              # MCP server（stdio）
 ./build/install/smaliscope/bin/smaliscope smoke            # JDWP 连通冒烟
 ./build/install/smaliscope/bin/smaliscope dump <包名> <类> <方法>
 ./build/install/smaliscope/bin/smaliscope debug <包名> <类> <方法> [步数] [into|over]
@@ -86,6 +88,18 @@ python3 scripts/e2e.py                             # 端到端回归（需设备
   `DebugSession.preSpecs` 先记下来，attach 时在 `vm.resume()` **之前**装上，否则应用早跑过断点位置了。
   类未加载时自动转 pending，靠 `CLASS_PREPARE` 在类加载回调里补下真实断点。
 
+- **`session/Debugger.kt` 是与协议无关的门面，Web 工作台和 MCP server 都是它的薄壳。**
+  两者共用同一份会话状态——一个进程里不能出现两套互不知情的调试状态。
+  新增对外接口时，逻辑放 `Debugger`，`server/` 和 `mcp/` 只做格式转换。
+
+- **MCP 的 stdout 是协议通道**，除 JSON-RPC 消息外不能往里写任何东西，日志一律走 stderr。
+  另外 MCP 侧没有事件流，所以 `Debugger.actAndWait` 用 `stopSeq` 序号区分
+  「新的一次停下」与「本来就停着」，让 agent 一次请求就能拿到结果而不必轮询。
+  给 agent 的文本里必须写明寄存器为何不可读——模型把「不可读」当成「值是 0」会让后续推理全错。
+
+- **断点编号由 `DebugSession` 统一发放**（`bpIdGen`），`BreakpointEngine.add` 接收外部 ID。
+  因为断点可以在 attach 之前设下，两边各自发号会让用户先拿到的编号在连接建立后失效。
+
 - **读寄存器一次往返批量取**（`FrameCmds.getValues` 收一批 slot），保证前端各视图同一帧内一致；
   批量失败才退化为逐个读，免得一个坏寄存器把整个面板打空。
 
@@ -100,5 +114,10 @@ python3 scripts/e2e.py                             # 端到端回归（需设备
 
 ## 明确的非目标（别顺手加）
 
-不处理加固壳；不做 Frida 式 hook、内存 patch、流量抓包；不做多设备集控、Web 研究平台、MCP/Agent 化；
+不处理加固壳；不做 Frida 式 hook、内存 patch、流量抓包；不做多设备集控、Web 研究平台；
 第一版不做寄存器写入、条件断点、表达式求值。设计原则是**只把「断点单步」这一件事做到新手能用、能看懂**。
+
+设计方案原本还把「MCP/Agent 化」列为非目标，**这一条已被有意识地突破**：`mcp/` 提供了标准 MCP server。
+理由是它没有动主线（与 Web 工作台共用同一个 `Debugger` 门面），却让 agent 能「下断点验证」而不是
+「读反编译代码猜」。但要清楚这确实把服务对象从新手扩展到了 agent——
+再往 agent 方向扩（自动找漏洞、让模型决定断点位置）就越界了，别顺手加。

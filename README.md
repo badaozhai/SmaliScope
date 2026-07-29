@@ -91,6 +91,8 @@ smaliscope apps                                   # 列出设备上的应用与�
 smaliscope dump <包名> [类名] [方法名]              # dump 带 dex_pc 的 smali、CFG、类型推导
 smaliscope debug <包名> <类名> <方法名> [步数] [into|over]
                                                   # 下断点 → 挂起启动 → 命中 → 单步打印寄存器
+smaliscope mcp                                    # 以 MCP server 运行（stdio）
+smaliscope mcp-install                            # 注册进本机 MCP 客户端
 ```
 
 例如：
@@ -98,6 +100,50 @@ smaliscope debug <包名> <类名> <方法名> [步数] [into|over]
 ```bash
 ./build/install/smaliscope/bin/smaliscope debug com.smaliscope.testapp Calc compute 10 over
 ```
+
+## 作为 MCP server 给 AI agent 用
+
+SmaliScope 实现了标准 **MCP**（Model Context Protocol），可以让 agent 直接驱动调试器。
+
+这件事的意义不在于「加了个 AI 功能」：现有的 AI 逆向工具都停在静态层面——把反编译代码喂给模型让它猜，
+因为没有工具能让 agent **真正跑起来看**。接上 MCP 之后，agent 从「读代码猜」变成
+「下断点验证」：想知道某个寄存器运行时到底是什么，就在那条指令上断下来读。
+
+一条命令注册到本机的 MCP 客户端：
+
+```bash
+./build/install/smaliscope/bin/smaliscope mcp-install
+```
+
+它会把 `[mcp_servers.smaliscope]` 写进 `~/.grok/config.toml`（grok-build），
+并打印 Claude Code / Cursor 的注册命令。也可以手动跑 `smaliscope mcp`，它走 JSON-RPC over stdio。
+
+暴露 16 个工具：`list_apps` `load_app` `list_classes` `list_methods` `disassemble`
+`decompile_java` `set_breakpoint` `list_breakpoints` `remove_breakpoint` `start_debug`
+`step` `resume` `read_registers` `read_stack` `expand_object` `stop_debug`。
+
+`start_debug` 返回给模型的原文长这样——位置、指令、指令含义、数据流、寄存器实际值一次给全：
+
+```
+已启动并命中：断点命中
+位置：com.smaliscope.testapp.Calc.compute(II)I  dex_pc=4  栈深=21
+当前指令：mul-int v2, p1, v1
+指令含义：整数乘法
+数据流：读 v1,p1 → 写 v2
+寄存器：
+  v0   int      0
+  v1   int      0
+  v2   此处不可用    —
+  p0   引用       Calc@15 (this)
+  p1   int      3
+  p2   int      4
+```
+
+注意 `v2` 那行：读不出来时会**明确写出原因**，而不是给个 0 或 null——
+让模型把「不可读」误当成「值是 0」会导致它后续推理全错。
+
+> 这里刻意做的是**通用 MCP server**，不是给某一家 agent 定制的适配器。
+> MCP 是开放协议，做一次就能被 grok-build、Claude Code、Cursor 等任何客户端使用。
 
 ## 测试
 
@@ -111,6 +157,12 @@ smaliscope debug <包名> <类名> <方法名> [步数] [into|over]
 
 ```bash
 python3 scripts/e2e.py
+```
+
+MCP 侧的端到端回归（握手 → 工具清单 → 载入 → 下断点 → 命中 → 单步），不需要先起工作台：
+
+```bash
+python3 scripts/mcp-e2e.py
 ```
 
 ---
@@ -128,6 +180,7 @@ python3 scripts/e2e.py
 | M7 | jadx Java 视图 + smali 指令中文词典悬浮解释 | ✅ |
 | M8 | 执行指针、寄存器高亮、数据流、CFG 走过路径、调用栈、对象图、时间线 | ✅ |
 | M9 | 中文错误引导 ✅ / jpackage 三平台打包 ❌ | 部分 |
+| — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
 
 ## 尚未实现
 
@@ -140,6 +193,9 @@ python3 scripts/e2e.py
 - **SSE 代替 WebSocket**：状态推送本来就是单向的（内核 → 前端），命令走普通 HTTP。SSE 在 JDK 自带的 `HttpServer` 上二十行就能实现，而手写 RFC 6455 的分帧、掩码、心跳和关闭握手要多几百行，对本项目没有额外收益。
 - **数据流用「数据流条」而非跨栏连线**：代码区与寄存器面板紧贴，中间没有横向空间画曲线，连线会糊在分栏边界上。改成显式的一行 `v1=0、p1=3 ──▶ v2`，同样表达「谁参与运算、结果去哪」，而且带上了实时值。
 - 内核包名用 `analysis/` 而非设计方案里的 `static/`（`static` 是 Java 关键字，留着容易在互操作时踩坑）。
+- **加了 MCP server**：设计方案 §1.3 把「不做 MCP/Agent」列为非目标，那条是为了守住「只把断点单步
+  做到新手能用」这个边界。MCP 没有动主线的任何东西（Web 工作台与 MCP 共用同一个 `Debugger` 门面），
+  但它确实把服务对象从「新手」扩展到了「agent」，属于有意识的范围扩张，记在这里。
 
 ## 目录
 
@@ -154,10 +210,12 @@ src/main/kotlin/com/smaliscope/
   session/      会话编排、设备与应用探测、推给前端的视图模型
   decompile/    jadx 按需反编译
   dict/         smali 指令中文词典
-  server/       本地 HTTP + SSE 工作台
+  server/       本地 HTTP + SSE 工作台；极简 JSON 读写
+  mcp/          标准 MCP server（JSON-RPC over stdio）与工具集
 src/main/resources/web/    前端（无框架，原生 JS/CSS/SVG）
 testapp/                   自带的 debuggable 测试应用（aapt2 + javac + d8 手工构建）
-scripts/e2e.py             需要设备的端到端回归
+scripts/e2e.py             Web 侧端到端回归（需设备）
+scripts/mcp-e2e.py         MCP 侧端到端回归（需设备）
 ```
 
 设计细节见 [`Smali断点调试器-系统设计方案.md`](Smali断点调试器-系统设计方案.md)，

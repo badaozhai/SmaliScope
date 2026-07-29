@@ -7,7 +7,6 @@ import com.smaliscope.jdwp.Location
 import com.smaliscope.jdwp.SuspendPolicy
 import com.smaliscope.session.BreakpointView
 import com.smaliscope.session.RuntimeIndex
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 断点引擎。
@@ -36,7 +35,6 @@ class BreakpointEngine(
     }
 
     private val events = EventRequestCmds(conn)
-    private val nextId = AtomicInteger(1)
 
     private val breakpoints = LinkedHashMap<Int, Bp>()
     private val byRequestId = HashMap<Int, Bp>()
@@ -46,13 +44,18 @@ class BreakpointEngine(
     /** 单步用的临时断点，与用户断点分开管理，命中后整批清掉。 */
     private val tempRequestIds = HashSet<Int>()
 
+    /**
+     * ID 由 [com.smaliscope.session.DebugSession] 统一分配并传进来，本类不自己发号。
+     * 因为断点可以在 attach 之前就设下（那时还没有本引擎），如果两边各发各的号，
+     * 用户先拿到的编号会在连接建立后失效。
+     */
     @Synchronized
-    fun add(fqcn: String, method: String, signature: String, dexPc: Int): Bp {
+    fun add(id: Int, fqcn: String, method: String, signature: String, dexPc: Int): Bp {
         breakpoints.values.firstOrNull {
             it.fqcn == fqcn && it.method == method && it.signature == signature && it.dexPc == dexPc
         }?.let { return it }
 
-        val bp = Bp(nextId.getAndIncrement(), fqcn, method, signature, dexPc)
+        val bp = Bp(id, fqcn, method, signature, dexPc)
         breakpoints[bp.id] = bp
         install(bp)
         return bp

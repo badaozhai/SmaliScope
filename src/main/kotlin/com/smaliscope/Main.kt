@@ -14,6 +14,8 @@ SmaliScope —— 面向新手的 DEX/smali 指令级断点调试器
   debug <包名> <类名> <方法名> [步数] [into|over]
                                  命令行调试：下断点 → 挂起启动 → 命中 → 单步看寄存器变化
   serve [--port 8080]            启动本地 Web 调试工作台（默认）
+  mcp                            以 MCP server 运行（JSON-RPC over stdio），供 AI agent 驱动调试
+  mcp-install                    把自己注册进本机 MCP 客户端（grok / Claude Code）的配置
 """
 
 /** APK 本地缓存目录。 */
@@ -31,6 +33,8 @@ fun main(args: Array<String>) {
         first == "dump" -> cmdDump(argv.drop(1))
         first == "debug" -> cmdDebug(argv.drop(1))
         first == "serve" -> cmdServe(argv.drop(1))
+        first == "mcp" -> cmdMcp()
+        first == "mcp-install" -> cmdMcpInstall()
         first == "-h" || first == "--help" -> println(USAGE.trim())
         else -> {
             System.err.println("未知命令: $first")
@@ -301,6 +305,101 @@ private fun printStop(
         }
     }
     println()
+}
+
+/**
+ * 以 MCP server 运行。stdout 是协议通道，这里不能打印任何东西——
+ * 所有面向人的输出都走 stderr。
+ */
+private fun cmdMcp() {
+    val dbg = com.smaliscope.session.Debugger(cacheDir)
+    Runtime.getRuntime().addShutdownHook(Thread { runCatching { dbg.close() } })
+    System.err.println("SmaliScope MCP server 已就绪（stdio）")
+    com.smaliscope.mcp.McpServer(dbg).serve(System.`in`, System.out)
+}
+
+/** 本可执行文件的绝对路径，写进 MCP 客户端配置用。 */
+private fun launcherPath(): java.io.File? {
+    val jar = runCatching {
+        java.io.File(
+            object {}.javaClass.protectionDomain.codeSource.location.toURI()
+        )
+    }.getOrNull() ?: return null
+    // installDist 的布局是 <root>/lib/*.jar 与 <root>/bin/smaliscope
+    val bin = jar.parentFile?.parentFile?.resolve("bin/smaliscope")
+    return bin?.takeIf { it.canExecute() }
+}
+
+/**
+ * 把 SmaliScope 注册进本机的 MCP 客户端。
+ *
+ * 做的是「注册」而不是「打包」：MCP 客户端（grok / Claude Code / Cursor）各自独立安装、
+ * 各自升级，把它们的二进制塞进我们的发行包只会带来体积、授权与版本三重负担，
+ * 而收益——「装完就能用 agent 驱动调试」——注册同样能拿到。
+ */
+private fun cmdMcpInstall() {
+    val bin = launcherPath() ?: run {
+        System.err.println(
+            "无法定位可执行文件路径。请先 ./gradlew installDist，" +
+                "然后用 build/install/smaliscope/bin/smaliscope mcp-install 运行。"
+        )
+        kotlin.system.exitProcess(1)
+    }
+    println("SmaliScope 可执行文件：$bin")
+    println()
+
+    // ── grok-build：~/.grok/config.toml 的 [mcp_servers.<name>] ──
+    val grokConfig = java.io.File(System.getProperty("user.home"), ".grok/config.toml")
+    val section = """
+        [mcp_servers.smaliscope]
+        command = "${bin.absolutePath}"
+        args = ["mcp"]
+        enabled = true
+        startup_timeout_sec = 30
+        # start_debug 要重启应用并等断点命中，给足时间
+        tool_timeouts = { start_debug = 300, step = 180, resume = 300 }
+    """.trimIndent()
+
+    if (grokConfig.exists() || java.io.File(System.getProperty("user.home"), ".grok").isDirectory) {
+        grokConfig.parentFile.mkdirs()
+        val old = if (grokConfig.exists()) grokConfig.readText() else ""
+        val updated = replaceTomlSection(old, "mcp_servers.smaliscope", section)
+        grokConfig.writeText(updated)
+        println("✅ 已写入 grok 配置：$grokConfig")
+    } else {
+        println("未发现 ~/.grok，跳过 grok 注册。装好 grok 后重跑本命令，或手动把下面这段加进 ~/.grok/config.toml：")
+        println()
+        println(section.prependIndent("    "))
+    }
+    println()
+
+    // ── Claude Code：交给它自己的 CLI，避免我们去猜它的配置文件格式 ──
+    println("Claude Code / Cursor 等其它 MCP 客户端，用各自的注册命令即可，例如：")
+    println()
+    println("    claude mcp add smaliscope -- ${bin.absolutePath} mcp")
+    println()
+    println("注册完成后，在 agent 里让它调 list_apps 就能开始。")
+}
+
+/**
+ * 替换 TOML 里的一个 section；不存在就追加。
+ * 只按「从 [name] 开始，到下一个顶层 [ 之前」这条规则改，不去解析整份 TOML——
+ * 用户的配置里可能有我们不认识的内容，全量重写风险更大。
+ */
+internal fun replaceTomlSection(original: String, sectionName: String, replacement: String): String {
+    val header = "[$sectionName]"
+    val lines = original.lines()
+    val start = lines.indexOfFirst { it.trim() == header }
+    if (start < 0) {
+        val sep = if (original.isBlank()) "" else if (original.endsWith("\n")) "\n" else "\n\n"
+        return original + sep + replacement + "\n"
+    }
+    var end = lines.size
+    for (i in start + 1 until lines.size) {
+        if (lines[i].trimStart().startsWith("[")) { end = i; break }
+    }
+    return (lines.subList(0, start) + replacement.lines() + lines.subList(end, lines.size))
+        .joinToString("\n")
 }
 
 private fun cmdServe(args: List<String>) {

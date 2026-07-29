@@ -81,7 +81,9 @@ class DebugSession(
     private data class BpSpec(val id: Int, val fqcn: String, val method: String, val signature: String, val dexPc: Int)
 
     private val preSpecs = LinkedHashMap<Int, BpSpec>()
-    private val preIdGen = java.util.concurrent.atomic.AtomicInteger(-1)
+
+    /** 断点编号的唯一发号处：attach 前后共用，用户拿到的编号不会失效。 */
+    private val bpIdGen = java.util.concurrent.atomic.AtomicInteger(1)
 
     private fun log(msg: String) {
         onLog?.invoke(msg)
@@ -162,7 +164,7 @@ class DebugSession(
         runCatching {
             vm.suspend()
             preSpecs.values.forEach { s ->
-                val bp = breakpoints.add(s.fqcn, s.method, s.signature, s.dexPc)
+                val bp = breakpoints.add(s.id, s.fqcn, s.method, s.signature, s.dexPc)
                 if (bp.state == BreakpointEngine.State.ACTIVE) anyBreakpointActive = true
             }
             preSpecs.clear()
@@ -337,12 +339,17 @@ class DebugSession(
     fun addBreakpoint(fqcn: String, method: String, signature: String, dexPc: Int): BreakpointView {
         lock.withLock {
             if (!::breakpoints.isInitialized) {
-                val id = preIdGen.getAndDecrement()
+                preSpecs.values.firstOrNull {
+                    it.fqcn == fqcn && it.method == method && it.signature == signature && it.dexPc == dexPc
+                }?.let {
+                    return BreakpointView(it.id, fqcn, method, signature, dexPc, "pending", 0, "等待连接建立")
+                }
+                val id = bpIdGen.getAndIncrement()
                 preSpecs[id] = BpSpec(id, fqcn, method, signature, dexPc)
                 log("断点已设置：${fqcn.substringAfterLast('.')}.$method（将在连接建立时生效）")
                 return BreakpointView(id, fqcn, method, signature, dexPc, "pending", 0, "等待连接建立")
             }
-            val bp = breakpoints.add(fqcn, method, signature, dexPc)
+            val bp = breakpoints.add(bpIdGen.getAndIncrement(), fqcn, method, signature, dexPc)
             if (bp.state == BreakpointEngine.State.ACTIVE) anyBreakpointActive = true
             log(
                 if (bp.state == BreakpointEngine.State.PENDING)
