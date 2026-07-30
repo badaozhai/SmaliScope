@@ -11,8 +11,8 @@ import java.util.Properties
  */
 object Settings {
 
-    private const val DEFAULT_BASE_URL = "https://claudegpt.org"
-    private const val DEFAULT_MODEL = "grok-4"
+    private const val DEFAULT_BASE_URL = "https://claudegpt.org/v1"
+    private const val DEFAULT_MODEL = "grok-latest"
 
     val dir: File = File(System.getProperty("user.home"), ".smaliscope")
     val file: File = File(dir, "config.properties")

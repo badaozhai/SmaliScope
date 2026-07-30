@@ -783,6 +783,59 @@ async function explain(mode) {
 $('#btnExplainCode').onclick = () => explain('code');
 $('#btnExplainRegs').onclick = () => explain('registers');
 
+// ── AI 设置弹层 ──────────────────────────────────────────────────────────
+async function openSettings() {
+  const c = await get('/api/config').catch(() => null);
+  if (c) {
+    $('#cfgBaseUrl').value = c.baseUrl || '';
+    $('#cfgModel').value = c.model || '';
+    $('#cfgKey').value = '';
+    $('#cfgKey').placeholder = c.hasKey ? `已配置（${c.maskedKey}），留空则不改动` : '留空则不启用；填入即启用';
+    $('#cfgState').textContent = c.enabled ? `已启用 · 请求地址 ${c.endpoint}` : '未启用（没有 Key 时 AI 功能整体隐藏）';
+  }
+  $('#settingsMask').classList.remove('hidden');
+}
+function closeSettings() { $('#settingsMask').classList.add('hidden'); }
+
+async function saveSettings(extra) {
+  const params = {
+    save: '1',
+    baseUrl: $('#cfgBaseUrl').value.trim(),
+    model: $('#cfgModel').value.trim(),
+    ...extra,
+  };
+  // 只有用户填了新 key 才发送 apiKey（留空 = 不改动）。
+  const k = $('#cfgKey').value.trim();
+  if (k) params.apiKey = k;
+  const c = await api('/api/config', params);
+  $('#cfgKey').value = '';
+  $('#cfgKey').placeholder = c.hasKey ? `已配置（${c.maskedKey}），留空则不改动` : '留空则不启用；填入即启用';
+  $('#cfgState').textContent = c.enabled ? `已启用 · 请求地址 ${c.endpoint}` : '未启用';
+  // 启用状态可能变了：让「AI 解释」标签页出现/消失。
+  $('#tabExplain').classList.toggle('hidden', !c.enabled);
+  return c;
+}
+
+$('#btnSettings').onclick = openSettings;
+$('#settingsClose').onclick = closeSettings;
+$('#settingsMask').onclick = (e) => { if (e.target.id === 'settingsMask') closeSettings(); };
+$('#cfgSave').onclick = async () => {
+  try { await saveSettings(); $('#cfgState').textContent = '已保存。' + $('#cfgState').textContent; }
+  catch (e) { $('#cfgState').textContent = '保存失败：' + e.message; }
+};
+$('#cfgClear').onclick = async () => {
+  try { await saveSettings({ apiKey: '' }); $('#cfgState').textContent = '已清除 Key，AI 功能已关闭。'; }
+  catch (e) { $('#cfgState').textContent = '操作失败：' + e.message; }
+};
+$('#cfgTest').onclick = async () => {
+  $('#cfgState').textContent = '正在测试…';
+  try {
+    await saveSettings();   // 先存，再用当前配置测
+    const r = await api('/api/config/test');
+    $('#cfgState').textContent = r.ok ? `✅ 连通正常，返回：${r.reply}` : `❌ ${r.message}`;
+  } catch (e) { $('#cfgState').textContent = '❌ ' + e.message; }
+};
+
 // ── 事件流 ───────────────────────────────────────────────────────────────
 function connectEvents() {
   const es = new EventSource('/api/events');

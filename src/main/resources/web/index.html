@@ -16,7 +16,31 @@
     <select id="appSelect" title="选择要调试的应用"><option>加载中…</option></select>
     <button id="loadApp" class="primary">载入应用</button>
     <div class="status" id="status"><span class="dot"></span><span id="statusText">未连接</span></div>
+    <button id="btnSettings" title="AI 解释设置">⚙</button>
   </header>
+
+  <div id="settingsMask" class="mask hidden">
+    <div class="modal">
+      <div class="modal-head">AI 解释设置 <button id="settingsClose" class="x">✕</button></div>
+      <p class="modal-note">配置一个 OpenAI 兼容接口后，界面会多出「AI 解释」标签页。
+        调用会把 smali、反编译的 Java 和当前寄存器值发送到下面的地址——你调的往往是别人的 APK，请确认地址可信。</p>
+      <label>接口地址
+        <input id="cfgBaseUrl" placeholder="https://claudegpt.org/v1">
+      </label>
+      <label>模型
+        <input id="cfgModel" placeholder="grok-4">
+      </label>
+      <label>API Key
+        <input id="cfgKey" type="password" placeholder="留空则不改动；填入即更新">
+      </label>
+      <div class="cfg-state" id="cfgState"></div>
+      <div class="modal-actions">
+        <button id="cfgTest">测试连通</button>
+        <button id="cfgClear">清除 Key</button>
+        <button id="cfgSave" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
 
   <div id="hintBar" class="hint hidden"></div>
 

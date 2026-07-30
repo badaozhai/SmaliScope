@@ -335,6 +335,24 @@ class Debugger(
     /** 配置变更后丢弃旧客户端。 */
     fun reloadLlm() { explainerRef = null }
 
+    /** 当前大模型配置（key 一律脱敏，绝不回显完整值）。 */
+    fun llmConfig(): com.smaliscope.config.Settings.Llm = com.smaliscope.config.Settings.llm()
+
+    /**
+     * 保存大模型配置。apiKey 传 null 表示「不改动」（界面留空即不覆盖已有 key），
+     * 传空字符串表示「清除」。存完丢弃旧客户端，改动即时生效。
+     */
+    fun saveLlmConfig(baseUrl: String?, model: String?, apiKey: String?) {
+        val S = com.smaliscope.config.Settings
+        baseUrl?.let { S.set("llm.baseUrl", it.trim()) }
+        model?.let { S.set("llm.model", it.trim()) }
+        if (apiKey != null) S.set("llm.apiKey", apiKey.trim())  // 空串即清除
+        reloadLlm()
+    }
+
+    /** 用当前配置做一次连通性自检，返回模型回话或抛出可读原因。 */
+    fun testLlm(): String = com.smaliscope.explain.LlmClient().ping()
+
     fun explain(fqcn: String, method: String, signature: String, dexPc: Int?): String =
         explainer().explainMethod(fqcn, method, signature, dexPc)
 

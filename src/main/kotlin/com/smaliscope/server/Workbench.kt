@@ -78,6 +78,8 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         }
         server.createContext("/api/state") { ex -> handle(ex) { json(ex, Json.of(dbg.state)) } }
         server.createContext("/api/explain") { ex -> handle(ex) { json(ex, explain(query(ex))) } }
+        server.createContext("/api/config") { ex -> handle(ex) { json(ex, config(ex, query(ex))) } }
+        server.createContext("/api/config/test") { ex -> handle(ex) { json(ex, testLlm()) } }
     }
 
     private fun ok() = Json.obj("ok" to Json.bool(true))
@@ -237,6 +239,33 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
             else -> dbg.explain(cls, method, sig, q["pc"]?.toIntOrNull())
         }
         return Json.obj("ok" to Json.bool(true), "text" to Json.str(text))
+    }
+
+    /** GET 返回当前 AI 配置（key 脱敏）；POST（带参数）保存后返回新状态。 */
+    private fun config(ex: HttpExchange, q: Map<String, String>): String {
+        if (ex.requestMethod == "POST" || q.containsKey("save")) {
+            dbg.saveLlmConfig(
+                baseUrl = q["baseUrl"],
+                model = q["model"],
+                // apiKey 缺省 = 不改动；显式传空串 = 清除。前端留空即不发这个参数。
+                apiKey = if (q.containsKey("apiKey")) q["apiKey"] else null,
+            )
+        }
+        val c = dbg.llmConfig()
+        return Json.obj(
+            "baseUrl" to Json.str(c.baseUrl),
+            "model" to Json.str(c.model),
+            "hasKey" to Json.bool(c.enabled),
+            "maskedKey" to Json.str(c.maskedKey),
+            "endpoint" to Json.str(c.chatEndpoint),
+            "enabled" to Json.bool(c.enabled),
+        )
+    }
+
+    private fun testLlm(): String = try {
+        Json.obj("ok" to Json.bool(true), "reply" to Json.str(dbg.testLlm()))
+    } catch (t: Throwable) {
+        Json.obj("ok" to Json.bool(false), "message" to Json.str(t.message ?: t.toString()))
     }
 
     private fun javaSource(q: Map<String, String>): String {
