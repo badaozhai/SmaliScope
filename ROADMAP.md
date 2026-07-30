@@ -88,10 +88,19 @@ void preAppSpecialize(AppSpecializeArgs *args) {
 }
 ```
 
+### 手上已有可验证的设备
+
+一台 Redmi（Android 14、`build.type=user`、`ro.debuggable=0`）装了 **KernelSU +
+ZygiskNext（`zygisksu`）**，Zygisk API 现成可用，这条路可以直接在真机上验证。
+同机已确认：自带 debuggable 标记的应用可正常调试（完整单步 + 读寄存器都通），
+未改造的第三方应用不可调，`su -c setprop ro.debuggable 1` 也失败——
+与模拟器结论一致。
+
 ### 待办
 
 - 写 Zygisk 模块（C++），目标包名从一个配置文件读，避免给所有应用打标记；
-- 工具侧：探测 Magisk/Zygisk 是否就位、模块是否安装、目标包是否已在名单里，
+- ~~工具侧探测 root 方案与 Zygisk 是否就位~~ ✅ 已做（`EnvProbe.rootKind` / `hasZygisk`，
+  经 `su` 读 `/data/adb`——普通 shell 读不到，会误判成没装）；剩下的是探测模块本身是否安装、目标包是否已在名单里，
   没有就给出中文引导（安装模块 → 加包名 → 强杀应用重启），而不是丢一句「不可调试」；
 - 验收：在 root 设备上，对一个**未经任何改造**的第三方 release 包完成
   「下断点 → 命中 → 读寄存器」，且该应用的签名与数据均未变动。

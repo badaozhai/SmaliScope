@@ -54,7 +54,7 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
     fun install(server: HttpServer) {
         server.createContext("/") { ex -> handle(ex) { serveStatic(ex) } }
         server.createContext("/api/events") { ex -> sse.attach(ex) }
-        server.createContext("/api/bootstrap") { ex -> handle(ex) { json(ex, bootstrap()) } }
+        server.createContext("/api/bootstrap") { ex -> handle(ex) { json(ex, bootstrap(query(ex)["serial"])) } }
         server.createContext("/api/session") { ex -> handle(ex) { json(ex, openSession(query(ex))) } }
         server.createContext("/api/classes") { ex -> handle(ex) { json(ex, classes(query(ex))) } }
         server.createContext("/api/methods") { ex -> handle(ex) { json(ex, methods(query(ex))) } }
@@ -78,8 +78,8 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
 
     private fun ok() = Json.obj("ok" to Json.bool(true))
 
-    private fun bootstrap(): String {
-        val b = dbg.bootstrap()
+    private fun bootstrap(serial: String?): String {
+        val b = dbg.bootstrap(serial)
         if (!b.ok) {
             return Json.obj(
                 "ok" to Json.bool(false),

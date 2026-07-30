@@ -92,14 +92,22 @@ class AdbClient(
     }
 
     /** 选一台在线设备：优先模拟器（设计方案 §2.3 的 P0 零配置路径）。 */
+    /**
+     * 选设备：显式指定 → `ANDROID_SERIAL`（adb 的惯例）→ 只有一台就用它 →
+     * 多台时优先模拟器。
+     *
+     * 「插着手机又开着模拟器」很常见，早先无条件优先模拟器会让用户怎么试都连不到手机，
+     * 而且看不出原因。
+     */
     fun pickDevice(preferredSerial: String? = null): Device {
         val list = devices().filter { it.isOnline }
         if (list.isEmpty()) throw IOException("未发现在线设备，请先启动模拟器或连接手机后重试")
-        preferredSerial?.let { want ->
-            return list.firstOrNull { it.serial == want }
-                ?: throw IOException("未找到设备 $want，当前在线: ${list.joinToString { it.serial }}")
+        val want = preferredSerial ?: System.getenv("ANDROID_SERIAL")?.takeIf { it.isNotBlank() }
+        want?.let { w ->
+            return list.firstOrNull { it.serial == w }
+                ?: throw IOException("未找到设备 $w，当前在线: ${list.joinToString { it.serial }}")
         }
-        return list.firstOrNull { it.isEmulator } ?: list.first()
+        return list.singleOrNull() ?: list.firstOrNull { it.isEmulator } ?: list.first()
     }
 
     private fun transport(sock: Socket, serial: String) {

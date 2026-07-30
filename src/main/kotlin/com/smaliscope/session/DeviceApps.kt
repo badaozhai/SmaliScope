@@ -71,7 +71,27 @@ class DeviceApps(private val adb: AdbClient, private val serial: String) {
             adb.shell(serial, "getprop ro.kernel.qemu").trim() == "1" ||
             adb.shell(serial, "getprop ro.build.characteristics").contains("emulator")
         val hasSu = adb.shell(serial, "which su").isNotBlank()
-        return EnvProbe(roDebuggable, sdk, isEmulator, hasSu)
+
+        // root 方案与 Zygisk 的判断必须经 su：/data/adb 只有 root 能读，
+        // 用普通 shell 去 ls 会一律得到空结果，从而误判成「没装」。
+        var rootKind = if (hasSu) "su" else "none"
+        var hasZygisk = false
+        if (hasSu) {
+            val probe = runCatching {
+                adb.shell(serial, "su -c 'ls -d /data/adb/magisk /data/adb/ksu /data/adb/ap " +
+                    "/data/adb/modules/zygisksu /data/adb/modules/rezygisk 2>/dev/null'")
+            }.getOrDefault("")
+            rootKind = when {
+                probe.contains("/data/adb/magisk") -> "Magisk"
+                probe.contains("/data/adb/ksu") -> "KernelSU"
+                probe.contains("/data/adb/ap") -> "APatch"
+                else -> "su"
+            }
+            // Magisk 自带 Zygisk（可能被关闭）；KernelSU / APatch 需要 ZygiskNext 之类的模块。
+            hasZygisk = probe.contains("zygisksu") || probe.contains("rezygisk") ||
+                rootKind == "Magisk"
+        }
+        return EnvProbe(roDebuggable, sdk, isEmulator, hasSu, rootKind, hasZygisk)
     }
 }
 
@@ -80,6 +100,10 @@ data class EnvProbe(
     val sdk: Int,
     val isEmulator: Boolean,
     val hasSu: Boolean,
+    /** Magisk / KernelSU / APatch / su（有 su 但认不出方案）/ none。 */
+    val rootKind: String = if (hasSu) "su" else "none",
+    /** Zygisk API 是否可用——决定了逐应用打可调试标记的方案能不能落地。 */
+    val hasZygisk: Boolean = false,
 ) {
     /**
      * ⚠️ 设计方案假设「非 Play 镜像 ro.debuggable=1 → 所有应用天生可 JDWP 调（P0 零配置）」。
@@ -97,7 +121,8 @@ data class EnvProbe(
      * 而且修改的是被研究对象本身。
      */
     val path: String get() = when {
-        hasSu -> "root"
+        hasZygisk -> "$rootKind + Zygisk"
+        hasSu -> rootKind
         roDebuggable -> "userdebug"
         else -> "user"
     }
@@ -109,10 +134,14 @@ data class EnvProbe(
             // 具体从哪一版开始变的没有实测，不写死。
             append("本机 ro.debuggable=1，但实测 Android 14 / 16 上它已不再让普通 release 包变为可调试。")
         }
-        if (hasSu) {
-            append("设备已 root，后续可装 Zygisk 模块给指定应用打上可调试标记（尚未实现），原包不动。")
-        } else {
-            append("要调试未改造的第三方应用需要 root（计划用 Zygisk 模块实现）。")
-        }
+        append(
+            when {
+                hasZygisk -> "本机有 $rootKind 且 Zygisk 可用，" +
+                    "装上配套模块后即可给指定应用打上可调试标记（模块尚未实现），原包一字不动。"
+                hasSu -> "本机有 $rootKind 但未发现 Zygisk（Magisk 自带；KernelSU / APatch 需装 ZygiskNext）。" +
+                    "逐应用打可调试标记要靠它。"
+                else -> "要调试未改造的第三方应用需要 root + Zygisk（模块尚未实现）。"
+            }
+        )
     }
 }

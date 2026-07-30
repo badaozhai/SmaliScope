@@ -62,7 +62,12 @@ class Debugger(
 
     // ── 设备与应用 ──────────────────────────────────────────────────────────
 
-    fun bootstrap(): Bootstrap {
+    /**
+     * @param want 指定设备序列号。为空时按 `ANDROID_SERIAL`（adb 的惯例）→
+     *   只有一台就用它 → 多台时优先模拟器 的顺序决定。
+     *   插着手机又开着模拟器是很常见的情形，不给选择权的话用户会一直连到不想连的那台。
+     */
+    fun bootstrap(want: String? = null): Bootstrap {
         val devices = adb.devices().filter { it.isOnline }
         if (devices.isEmpty()) {
             return Bootstrap(
@@ -71,7 +76,18 @@ class Debugger(
                 serial = null, devices = emptyList(), env = null, apps = emptyList(),
             )
         }
-        val dev = devices.firstOrNull { it.isEmulator } ?: devices.first()
+        val asked = want ?: System.getenv("ANDROID_SERIAL")?.takeIf { it.isNotBlank() }
+        if (asked != null && devices.none { it.serial == asked }) {
+            return Bootstrap(
+                ok = false,
+                message = "指定的设备 $asked 不在线。当前可用：${devices.joinToString { it.serial }}",
+                serial = null, devices = devices.map { it.serial }, env = null, apps = emptyList(),
+            )
+        }
+        val dev = devices.firstOrNull { it.serial == asked }
+            ?: devices.singleOrNull()
+            ?: devices.firstOrNull { it.isEmulator }
+            ?: devices.first()
         serial = dev.serial
         val apps = DeviceApps(adb, dev.serial)
         val env = apps.probeEnvironment()

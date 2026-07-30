@@ -51,6 +51,30 @@
 详见 ROADMAP 第 2 项。这一点应当在产品里对用户直说，
 而不是让他换了非 Play 镜像之后发现还是不行。
 
+## 真机复核（Redmi，Android 14，KernelSU）
+
+后来在一台真机上复核，结论一致，另外多了两条信息：
+
+| 项目 | 结果 |
+|---|---|
+| 机型 / 系统 | Redmi `2312DRAABC` · Android 14 · **`build.type=user`、`ro.debuggable=0`** |
+| root | KernelSU（`ksud zakozako 3.1.8`） |
+| 自带 debuggable 标记的应用 | ✅ 可调（我们的测试 App，以及机主自己装的一个 debug 包） |
+| 未改造的第三方应用 | ❌ 不在 `adb jdwp` 里，与模拟器一致 |
+| `su -c setprop ro.debuggable 1` | ❌ 失败，`ro.*` 是一次性写入 |
+| **Zygisk 是否可用** | ✅ 已装 `zygisksu`（ZygiskNext） |
+
+两点值得记住：
+
+**一、root 本身不解决问题。** 有 root 也改不了 `ro.debuggable`，而且就算改成了也没用
+（上面已经证明）。真正需要的是在进程 fork 时改 runtime flags，那要靠 Zygisk。
+
+**二、探测 root 方案与 Zygisk 必须经 `su`。** `/data/adb` 只有 root 能读，
+用普通 shell `ls` 会一律得到空结果——我第一次就是这样误判成「这台没有 Magisk 所以没有 Zygisk」，
+实际上它有 KernelSU + ZygiskNext。`EnvProbe` 已按此改写。
+
+好消息是：**这台设备上 Zygisk API 是现成的**，ROADMAP 第 2 项的模块方案可以直接落地验证。
+
 ## 复现
 
 ```bash
