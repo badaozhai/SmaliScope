@@ -271,7 +271,7 @@ python3 scripts/mcp-e2e.py
 | M8 | 执行指针、寄存器高亮、数据流、CFG 走过路径、调用栈、对象图、时间线 | ✅ |
 | M9 | 中文错误引导 + jpackage 打包（自带 JRE，双击即用） | ✅ |
 | — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
-| — | Zygisk 模块：给名单里的应用打可调试标记，原 APK 不动 | ✅ |
+| — | Zygisk 模块：给名单里的应用打可调试标记，原 APK 不动（真机验证：未改造的 Element X release 包成功命中断点） | ✅ |
 
 ## 已知限制：寄存器可读率
 
@@ -293,10 +293,8 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
 
 ## 尚未实现
 
-- **Zygisk 模块尚未在真机上端到端验证**：模块已写好并编译通过（`zygisk/`），
-  工具侧的状态探测与名单管理也已可用，但「装上模块 → 对一个未改造的 release 包
-  下断点命中」这一步还没实测过。装 Zygisk 模块有让设备无法启动的风险，
-  需要使用者自行决定是否在自己的设备上验证。
+- **jpackage 目前只在 macOS 上出过包**（.dmg）。Windows 的 .msi、Linux 的 .deb
+  需要在对应系统上各跑一次 `./gradlew packageApp`（jpackage 的固有限制），尚未实测。
 - 寄存器写入、条件断点、表达式求值（设计方案里本就列为二期）。
 - **platform-tools 自动下载**。现在的做法是：连不上 adb server 时自动在常见位置找 adb 并
   拉起它（`ANDROID_SDK_ROOT`、`PATH`、各平台默认 SDK 路径），找不到才报错并给出中文指引。

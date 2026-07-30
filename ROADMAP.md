@@ -50,148 +50,21 @@ M1–M8 已实现并在模拟器上实测通过（见 README）。本文件记�
 
 ---
 
-## 2. Zygisk 模块：逐应用打 FLAG_DEBUGGABLE
+## 2. ~~Zygisk 模块：逐应用打 FLAG_DEBUGGABLE~~ ✅ 已完成并真机验证
 
-第 1 项证伪了所有「靠系统属性免改造」的路子之后，让第三方应用可调只剩两个选择：
-**改 APK**（重打包 + 重签名）或 **改进程启动时的 runtime flags**（Zygisk 模块）。
-选后者。
+在一台 Redmi（Android 14、`build.type=user`、`ro.debuggable=0`、KernelSU + ZygiskNext）上
+端到端跑通：装模块 → 重启 → 把一个**未经任何改造的** release 包（Element X，官方签名、
+manifest 里没有 DEBUGGABLE）加入名单 → 强杀重启 → 它出现在 `adb jdwp` 里 →
+断点命中 `Application.onCreate` → 指令级单步 → 读到寄存器实时值
+（`v0` = `AppInitializer@12`、`v1` = `Class@14`）。
 
-### 为什么不走重签名
+验证「原包不动」：调试后该应用签名仍是官方的 `6A:2F:DC:…`，manifest 依旧无 DEBUGGABLE 标记——
+可调试完全来自 Zygisk 在 fork 时置的 runtime flag，而非改 APK。这正是不走重签名的意义。
 
-- **签名一变，应用自带的签名校验就失效**——国产 App 里这类校验极其普遍，
-  改完往往直接闪退或走进降级逻辑，你调的已经不是原来那个程序了；
-- **签名变了必须卸载重装，用户数据全丢**，无法在真实数据状态下复现问题；
-- **它修改的是被研究对象本身**。逆向时这等于污染证据：你看到的 dex 偏移、
-  类加载顺序、乃至反调试分支都可能因为改造而与原包不同；
-- Play 集成 / Play Integrity 之类的链路一并失效，很多 App 会因此行为改变。
-
-一句话：为了看清楚一个东西而先把它改掉，方法本身就不成立。
-
-### 为什么 Zygisk 是对的
-
-原包一字不动——签名、数据、更新链路全部保留，观察对象就是它本来的样子。
-而且只对目标应用生效，不必动全局 `ro.debuggable`（那个属性既是反调试检测最爱读的，
-第 1 项也已实测证明它根本不起作用）。
-
-机制正好对上第 1 项的实测结论：**进程能否被 JDWP 调试，取决于 zygote fork 时的
-runtime flags**，而 Zygisk 的 `preAppSpecialize` 拿到的 `AppSpecializeArgs` 里
-`runtime_flags` 是可写的。对目标包置位即可：
-
-```cpp
-// com.android.internal.os.Zygote
-//   DEBUG_ENABLE_JDWP      = 1        让 adbconnection 起来，进程才会出现在 adb jdwp
-//   DEBUG_JAVA_DEBUGGABLE  = 1 << 8   让 ART 以可调试模式运行（断点所需的 deopt 靠它）
-void preAppSpecialize(AppSpecializeArgs *args) {
-    if (matchesTarget(args->nice_name)) {
-        *args->runtime_flags |= DEBUG_ENABLE_JDWP | DEBUG_JAVA_DEBUGGABLE;
-    }
-}
-```
-
-### 手上已有可验证的设备
-
-一台 Redmi（Android 14、`build.type=user`、`ro.debuggable=0`）装了 **KernelSU +
-ZygiskNext（`zygisksu`）**，Zygisk API 现成可用，这条路可以直接在真机上验证。
-同机已确认：自带 debuggable 标记的应用可正常调试（完整单步 + 读寄存器都通），
-未改造的第三方应用不可调，`su -c setprop ro.debuggable 1` 也失败——
-与模拟器结论一致。
-
-### 待办
-
-- 写 Zygisk 模块（C++），目标包名从一个配置文件读，避免给所有应用打标记；
-- ~~工具侧探测 root 方案与 Zygisk 是否就位~~ ✅ 已做（`EnvProbe.rootKind` / `hasZygisk`，
-  经 `su` 读 `/data/adb`——普通 shell 读不到，会误判成没装）；剩下的是探测模块本身是否安装、目标包是否已在名单里，
-  没有就给出中文引导（安装模块 → 加包名 → 强杀应用重启），而不是丢一句「不可调试」；
-- 验收：在 root 设备上，对一个**未经任何改造**的第三方 release 包完成
-  「下断点 → 命中 → 读寄存器」，且该应用的签名与数据均未变动。
-
-### 代价要说清楚
-
-这条路**需要 root**。所以能力边界是：
-
-- 调**你自己开发的** debug 包 → 零配置，不需要 root（新手最常见的场景，产品主线）；
-- 调**别人的** release 包 → 需要 root + 本模块。
-
-放弃重签名意味着放弃「非 root 真机也能调第三方应用」这个场景。这是有意识的取舍：
-那条路能跑通，但跑通之后你研究的已经不是原来那个 App 了。
+产出：
+- `zygisk/`：模块 C++ 源码（约 160 行）+ `build.sh`，产物 5–7.5KB/ABI；
+- `smaliscope zygisk <status|install|add|remove|list>`：状态探测、装模块、维护名单；
+- `AdbClient.push` 与 `suShell`（适配 Magisk/KernelSU 的 `su -c` 与 AOSP 的 `su root sh -c`）。
 
 ---
 
-## 3. jpackage 打包
-
-面向新手却要求先装 JDK 和 Gradle 是自相矛盾的。
-
-### 怎么做
-
-jpackage 出三平台安装包并内嵌 JRE；首次运行自动下载 platform-tools（比内嵌小且始终最新）。
-需要处理：adb 路径探测（现在依赖用户已装 SDK）、缓存目录位置、无 GUI 时的降级。
-
-### 验收
-
-在一台没装 JDK / Android SDK 的干净机器上双击安装、双击运行，能连上模拟器。
-
----
-
-## 4. AI 能力
-
-### 已完成：标准 MCP server
-
-`smaliscope mcp` 暴露 16 个工具供任何 MCP 客户端驱动调试，`smaliscope mcp-install` 一键注册。
-刻意做成通用 MCP 而非某家 agent 的适配器——做一次就能被 grok-build、Claude Code、Cursor 共用。
-
-这一步把 agent 从「读反编译代码猜」变成「下断点验证」。但要注意它**放大了第 0 项的风险**：
-人类看到「此处不可用」会自己判断，agent 拿到空值容易当成事实继续推理。
-目前的缓解是在返回文本里明确写出不可读的原因，但根子还在第 0 项。
-
-### 以下未做
-
-设计方案的非目标里写了「不做 MCP/Agent」。MCP 那步已是有意识的范围扩张（见 README 偏差一节）。
-剩下的 AI 能力只应该出现在「让新手看懂」这条主线上，且不得触碰正确性与实时性。
-
-### 4.1 离线生成完整指令词典（收益/风险比最高，建议先做这个）
-
-`dict/SmaliDict.kt` 现在是手写的约 90 条（靠指令族前缀覆盖变体），完整 dex 指令有 200+ 条。
-用模型**离线**批量生成中文解释 → 人工校对 → 固化成静态 JSON 随包发布。
-**运行期零依赖、零网络**，完全不破坏「开箱即用」的定位。
-
-验收：覆盖全部 dex opcode；抽样 30 条人工核对无错误；运行期不产生任何网络请求。
-
-### 4.2 「这段 smali 在干什么」按需摘要
-
-上下文条件很好：jadx 的 Java 视图 + 带 dex_pc 的 smali + 实时寄存器值 + 调用栈可以一起喂进去。
-对着混淆过的 smali 发懵的新手，这是理解上最大的一块增量。
-
-### 4.3 混淆 App 的寄存器语义命名
-
-结合数据流和它调用的 framework API，推测「v3 看起来是个索引 / 是用户名 / 是校验结果」。
-恰好补在工具当前最弱的地方（`README` 里 jadx 兜底并不足以解决 v0/v1 无意义的问题）。
-
-### 明确不要做
-
-- **不要进单步热路径**：实时性是卖点，设计方案要求同一帧内刷新所有视图，
-  加一次网络往返就毁了。
-- **不要替代寄存器类型推导**：那必须是确定性的，猜错会静默读出垃圾值，比读不出来更糟。
-- **不要让模型决定断点位置或自动找漏洞**：越过项目边界，且新手最容易误信这类输出。
-
-### 工程约束
-
-新开 `explain/` 模块，只在用户主动触发时调用，按 `(方法, dex_pc)` 缓存，
-没配 key 时整个功能在界面上消失。**绝不进 `session/` 的事件路径。**
-
-隐私前提必须说清楚：用户调的往往是别人的 APK，把 smali 和反编译结果发给第三方 API
-必须是显式 opt-in，并在界面上讲明白。
-
----
-
-## 零散项
-
-- ~~`Main.kt` 里子命令各自 new 一份 `ApkIndex`~~ ✅ 已统一到 `session/Debugger`：
-  `dump` / `debug` / `audit` / `serve` 与 MCP 现在共用同一条加载与会话路径。
-- 断点目前只能按 dex_pc 下；设计方案 §6 的「预设断点模板」（断在所有 Activity.onCreate）还没做。
-- 前端的时间线只在切到该标签时刷新，单步过程中不是实时增长的。
-- **偶发**：上一次调试会话结束后紧接着开新会话，有时断点等待会超时，
-  强杀目标应用后重试即恢复。`launchSuspended` 已经先做了
-  `am clear-debug-app` + `am force-stop`，所以怀疑是旧连接或
-  `mDebugTransient` 状态没散干净，尚未定位。复现不稳定，先记着。
-- `DeviceApps.runningProcesses()` 解析 `ps -A -o PID,NAME`。已在 Android 14 与 16 上实测可用，
-  但更老的版本输出格式可能不同，尚未覆盖。
