@@ -16,8 +16,26 @@
     <select id="appSelect" title="选择要调试的应用"><option>加载中…</option></select>
     <button id="loadApp" class="primary">载入应用</button>
     <div class="status" id="status"><span class="dot"></span><span id="statusText">未连接</span></div>
+    <button id="btnChat" title="grok 对话（驱动调试器）">💬 grok</button>
     <button id="btnSettings" title="AI 解释设置">⚙</button>
   </header>
+
+  <aside id="chatDrawer" class="chat-drawer hidden">
+    <div class="chat-head">
+      <span>grok 助手</span>
+      <span class="chat-sub" id="chatStatus">检测中…</span>
+      <div class="spacer"></div>
+      <button id="chatReset" title="新开一轮对话">新对话</button>
+      <button id="chatCloseBtn" class="x">✕</button>
+    </div>
+    <div class="chat-note">由本机的 grok-build 驱动。它已注册 smaliscope 的 MCP，可以在对话里
+      真的下断点、单步、读寄存器。工具执行已自动批准，消耗你的 grok 账号额度。</div>
+    <div id="chatLog" class="chat-log"></div>
+    <div class="chat-input">
+      <textarea id="chatText" rows="2" placeholder="例如：调试 com.smaliscope.testapp，在 Calc.compute 的 mul-int 处断点，告诉我 p1、p2 的值"></textarea>
+      <button id="chatSend" class="primary">发送</button>
+    </div>
+  </aside>
 
   <div id="settingsMask" class="mask hidden">
     <div class="modal">

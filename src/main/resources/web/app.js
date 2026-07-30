@@ -851,8 +851,81 @@ function connectEvents() {
     list.scrollTop = list.scrollHeight;
     if (list.childElementCount > 400) list.removeChild(list.firstChild);
   });
+  es.addEventListener('chat-start', () => chatOnStart());
+  es.addEventListener('chat-thought', (e) => chatOnThought(JSON.parse(e.data)));
+  es.addEventListener('chat-text', (e) => chatOnText(JSON.parse(e.data)));
+  es.addEventListener('chat-done', (e) => chatOnDone(JSON.parse(e.data)));
+  es.addEventListener('chat-fail', (e) => chatOnFail(JSON.parse(e.data)));
+  es.addEventListener('chat-end', () => chatOnEnd());
   es.onerror = () => { /* EventSource 会自动重连 */ };
 }
+
+// ── grok 对话抽屉 ────────────────────────────────────────────────────────
+const CH = { busy: false, cur: null, curText: '', think: null };
+
+async function refreshChatStatus() {
+  const s = await get('/api/chat/status').catch(() => null);
+  const el2 = $('#chatStatus');
+  if (!s) { el2.textContent = '状态未知'; return; }
+  el2.textContent = s.available ? (s.hasSession ? '已就绪 · 有会话' : '已就绪') : '未检测到 grok';
+  $('#chatSend').disabled = !s.available || s.busy;
+}
+
+function chatBubble(cls, text) {
+  const box = $('#chatLog');
+  const d = el('div', 'chat-msg ' + cls, text || '');
+  box.appendChild(d); box.scrollTop = box.scrollHeight;
+  return d;
+}
+function chatOnStart() {
+  CH.busy = true; CH.cur = null; CH.curText = ''; CH.think = null;
+  $('#chatSend').disabled = true;
+}
+function chatOnThought(t) {
+  // 思考流：折叠成一行灰字，滚动更新（不逐条堆积）。
+  if (!CH.think) { CH.think = el('div', 'chat-think', ''); $('#chatLog').appendChild(CH.think); }
+  CH.think.textContent = '思考中…' + (CH.think.textContent + t).slice(-120);
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+}
+function chatOnText(t) {
+  if (CH.think) { CH.think.remove(); CH.think = null; }
+  if (!CH.cur) { CH.cur = chatBubble('grok', ''); CH.curText = ''; }
+  CH.curText += t; CH.cur.textContent = CH.curText;
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+}
+function chatOnDone() {
+  if (CH.think) { CH.think.remove(); CH.think = null; }
+  CH.cur = null;
+  // 注：grok 会另起一个 smaliscope MCP 进程来调试，和本界面的手动调试是两个独立会话，
+  // 不共享断点/挂起状态。所以这里不去动断点面板。
+}
+function chatOnFail(m) {
+  if (CH.think) { CH.think.remove(); CH.think = null; }
+  chatBubble('grok err', '⚠ ' + m);
+  CH.cur = null;
+}
+function chatOnEnd() {
+  CH.busy = false;
+  refreshChatStatus();
+}
+
+async function sendChat() {
+  const ta = $('#chatText');
+  const msg = ta.value.trim();
+  if (!msg || CH.busy) return;
+  chatBubble('user', msg);
+  ta.value = '';
+  try { await api('/api/chat', { message: msg }); }
+  catch (e) { chatOnFail(e.message); }
+}
+
+$('#btnChat').onclick = () => { $('#chatDrawer').classList.toggle('hidden'); refreshChatStatus(); };
+$('#chatCloseBtn').onclick = () => $('#chatDrawer').classList.add('hidden');
+$('#chatSend').onclick = sendChat;
+$('#chatReset').onclick = async () => { await api('/api/chat/reset'); $('#chatLog').innerHTML = ''; refreshChatStatus(); };
+$('#chatText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); }
+});
 
 // ── 绑定 ─────────────────────────────────────────────────────────────────
 $('#loadApp').onclick = loadApp;

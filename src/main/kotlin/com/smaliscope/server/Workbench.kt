@@ -42,6 +42,8 @@ fun startWorkbench(port: Int) {
 class Workbench(private val dbg: Debugger) : AutoCloseable {
 
     private val sse = SseHub()
+    private val grok = com.smaliscope.grok.GrokBridge()
+    @Volatile private var grokBusy = false
 
     init {
         dbg.onState = { st ->
@@ -80,6 +82,10 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         server.createContext("/api/explain") { ex -> handle(ex) { json(ex, explain(query(ex))) } }
         server.createContext("/api/config") { ex -> handle(ex) { json(ex, config(ex, query(ex))) } }
         server.createContext("/api/config/test") { ex -> handle(ex) { json(ex, testLlm()) } }
+        server.createContext("/api/chat/status") { ex -> handle(ex) { json(ex, chatStatus()) } }
+        server.createContext("/api/chat") { ex -> handle(ex) { json(ex, chatSend(query(ex))) } }
+        server.createContext("/api/chat/reset") { ex -> handle(ex) { grok.reset(); json(ex, ok()) } }
+        server.createContext("/api/chat/stop") { ex -> handle(ex) { grok.stop(); json(ex, ok()) } }
     }
 
     private fun ok() = Json.obj("ok" to Json.bool(true))
@@ -260,6 +266,53 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
             "endpoint" to Json.str(c.chatEndpoint),
             "enabled" to Json.bool(c.enabled),
         )
+    }
+
+    // ── grok-build 对话（封装 CLI）─────────────────────────────────────────
+    private fun chatStatus(): String {
+        val s = grok.status()
+        return Json.obj(
+            "available" to Json.bool(s.available),
+            "message" to Json.str(s.message),
+            "hasSession" to Json.bool(s.hasSession),
+            "busy" to Json.bool(grokBusy),
+        )
+    }
+
+    /**
+     * 发一句给 grok，后台跑，事件经 SSE 流回前端（chat-thought / chat-text / chat-done / chat-fail）。
+     * 一次只允许一轮：grok 子进程不便并发。
+     */
+    private fun chatSend(q: Map<String, String>): String {
+        val msg = q["message"]?.takeIf { it.isNotBlank() } ?: error("消息为空")
+        synchronized(this) {
+            if (grokBusy) return Json.obj("ok" to Json.bool(false), "message" to Json.str("上一轮还在进行"))
+            grokBusy = true
+        }
+        sse.send("chat-start", "{}")
+        Thread({
+            try {
+                grok.send(msg) { ev ->
+                    when (ev) {
+                        is com.smaliscope.grok.GrokBridge.Event.Thought ->
+                            sse.send("chat-thought", Json.str(ev.text))
+                        is com.smaliscope.grok.GrokBridge.Event.Text ->
+                            sse.send("chat-text", Json.str(ev.text))
+                        is com.smaliscope.grok.GrokBridge.Event.Done ->
+                            sse.send("chat-done", Json.obj(
+                                "stopReason" to Json.str(ev.stopReason),
+                                "tokens" to Json.num(ev.tokens),
+                            ))
+                        is com.smaliscope.grok.GrokBridge.Event.Failed ->
+                            sse.send("chat-fail", Json.str(ev.message))
+                    }
+                }
+            } finally {
+                grokBusy = false
+                sse.send("chat-end", "{}")
+            }
+        }, "grok-chat").start()
+        return ok()
     }
 
     private fun testLlm(): String = try {

@@ -58,6 +58,24 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 }
 .hidden { display: none !important; }
 
+/* grok 对话抽屉 */
+.chat-drawer { position: fixed; top: 0; right: 0; width: 420px; max-width: 94vw; height: 100vh; z-index: 90;
+  background: var(--bg-2); border-left: 1px solid var(--line); display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.35); }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.chat-head .chat-sub { font-size: 11px; color: var(--fg-dim); font-weight: 400; }
+.chat-head .x { background: none; border: none; color: var(--fg-dim); }
+.chat-note { font-size: 11px; color: var(--fg-dim); line-height: 1.6; padding: 8px 14px; border-bottom: 1px solid var(--line); background: #171b21; }
+.chat-log { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.chat-msg { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.chat-msg.user { align-self: flex-end; background: #23384f; color: #cfe6ff; padding: 7px 11px; border-radius: 10px 10px 2px 10px; max-width: 88%; }
+.chat-msg.grok { align-self: flex-start; background: var(--bg-3); padding: 7px 11px; border-radius: 10px 10px 10px 2px; max-width: 92%; }
+.chat-msg.grok.err { background: #3a2020; color: #f0b0b0; }
+.chat-tool { align-self: flex-start; font-family: var(--mono); font-size: 11px; color: var(--read); border-left: 2px solid var(--read); padding: 2px 8px; }
+.chat-think { align-self: flex-start; font-size: 11px; color: #6f7787; font-style: italic; max-width: 92%; white-space: pre-wrap; }
+.chat-input { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.chat-input textarea { flex: 1; resize: none; font: inherit; }
+#btnChat { padding: 5px 10px; }
+
 /* AI 设置弹层 */
 .mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; width: 460px; max-width: 92vw; }
