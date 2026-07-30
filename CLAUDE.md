@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目是什么
 
-面向新手的 DEX/smali **指令级**断点调试器：Kotlin/JVM 内核 + 本地 Web 工作台。
-M1–M8 已全部实现并在模拟器上实测通过，M9 只差打包发布。设计基线见
-`Smali断点调试器-系统设计方案.md`，实现现状与偏差见 `README.md`。
+面向新手的 DEX/smali **指令级**断点调试器：Kotlin/JVM 内核 + 本地 Web 工作台，
+另有标准 MCP server（供 agent 驱动）与 Zygisk 模块（让未改造的第三方应用可调）。
+M1–M9 已全部实现，在 Android 14/16 模拟器与一台 Android 14 真机上实测通过。
+唯一未端到端验证的是 Zygisk 模块（装它有让设备无法启动的风险，需使用者自行决定）。
+设计基线见 `Smali断点调试器-系统设计方案.md`，实现现状与偏差见 `README.md`，
+下一阶段见 `ROADMAP.md`。
 
 ## 常用命令
 
