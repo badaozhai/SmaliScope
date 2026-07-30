@@ -291,6 +291,29 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
 **局部寄存器 `vN` 在所有配置下都 100% 可读**，失败只集中在被复用的参数寄存器上。
 读不出来时界面会写明原因，而不是显示 0 或空白——把「不可读」误当成「值是 0」比不显示更糟。
 
+## 实测环境
+
+下面这些结论都在真实设备上跑过，不是纸上推演。核心链路（下断点 → 命中 → 单步 → 读寄存器）
+在两类环境都验证通过：
+
+| 设备 | 系统 | 关键属性 | root / Zygisk | 用途 |
+|------|------|----------|---------------|------|
+| Redmi Note 13 5G（`2312DRAABC`） | Android 14（SDK 34）· arm64-v8a | `build.type=user`、`ro.debuggable=0` | KernelSU 3.1.8（zakozako）+ ZygiskNext | 最真实的生产环境；验证 Zygisk 方案 |
+| AVD `google_apis`（非 Play 镜像） | Android 14（SDK 34）· arm64-v8a | `build.type=userdebug`、`ro.debuggable=1` | 有 su，无 Zygisk | 验证 P0 前提证伪、寄存器可读率 |
+| AVD `google_apis_playstore` | Android 16（SDK 36）· arm64-v8a | Play 镜像、`ro.debuggable=0` | 无 | M1–M8 主要开发环境 |
+
+在真机上验证到的两件关键事实：
+
+- **未改造的第三方 release 包可调试**——装上 Zygisk 模块后，把 Element X（官方签名、
+  manifest 里没有 `debuggable` 标记）加入名单，即命中 `Application.onCreate` 并单步读到寄存器；
+  调试后其签名与 manifest 均未改变，可调试完全来自运行时 flag。
+- **`ro.debuggable` 那条路确实走不通**——真机上 `su -c 'setprop ro.debuggable 1'` 失败
+  （`ro.*` 一次性写入），未改造应用也始终不在 `adb jdwp` 里。详见
+  [docs/p0-path-findings.md](docs/p0-path-findings.md)。
+
+寄存器可读率在真机（Android 14）与模拟器（Android 14 / 16）上逐项一致，说明那批数字不是
+模拟器特有产物；完整数据见 [docs/register-readability.md](docs/register-readability.md)。
+
 ## 尚未实现
 
 - **jpackage 目前只在 macOS 上出过包**（.dmg）。Windows 的 .msi、Linux 的 .deb
@@ -338,3 +361,16 @@ docs/register-readability.md  寄存器可读率实测报告
 
 设计细节见 [`Smali断点调试器-系统设计方案.md`](Smali断点调试器-系统设计方案.md)，
 下一阶段计划见 [`ROADMAP.md`](ROADMAP.md)。
+
+---
+
+## 赞助鸣谢（下面的服务都是大家日常需要的哦！）
+
+[![ClaudeGPT](assets/sponsors/claudegpt-logo.png)](https://claudegpt.org)
+
+**[ClaudeGPT](https://claudegpt.org)** —— 一个正版靠谱稳定的 AI 代理。
+联系方式 QQ：89066216
+
+**[Fridare](https://github.com/suifei/fridare)** —— 强大的 Frida 重打包工具，用于 iOS 和 Android。轻松修改 Frida 特征，增强隐蔽性，绕过检测。简化逆向工程和安全测试。
+Powerful Frida repackaging tool for iOS and Android. Easily modify Frida servers to enhance stealth and bypass detection. Streamlines reverse engineering and security testing.
+联系方式 QQ 群：555354813
