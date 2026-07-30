@@ -11,6 +11,17 @@
 > `p0` 带着 `this` 标记，底部控制流图里走过的块着蓝、当前块黄框。
 > 注意 `v2` 显示的是「此处不可用」而不是 0 —— 读不出来时会说实话。
 
+### 真机实录
+
+在一台 Redmi Note 13（Android 14）上录的：左边是手机屏幕，右边是工作台。
+下断点 → 命中（App 被冻结）→ 单步看寄存器变化 → 继续，手机随即画出 `compute=17`。
+左右两侧是同一时刻的状态。
+
+![真机 + 工作台实录](docs/images/realdevice-demo.gif)
+
+> 这段由 [`scripts/record-demo.py`](scripts/record-demo.py) 生成：逐步驱动调试，每一步同时抓
+> 手机截图与工作台截图拼成一帧，所以两边天然同步。想换设备或方法，改脚本重跑即可。
+
 ## 它解决什么问题
 
 现有工具对新手都不友好：smalidea 配置繁琐、报错晦涩；JADX/JEB 只能看静态；Frida 是方法级 hook，
@@ -355,6 +366,7 @@ zygisk/                    Zygisk 模块（C++）：给名单里的应用打可�
 scripts/e2e.py             Web 侧端到端回归（需设备）
 scripts/mcp-e2e.py         MCP 侧端到端回归（需设备）
 scripts/shots.py           重新生成 README 里的界面截图（Chrome headless + CDP）
+scripts/record-demo.py     录「真机 + 工作台」并排演示 gif/mp4（需真机 + Chrome + ffmpeg）
 docs/images/               界面截图
 docs/register-readability.md  寄存器可读率实测报告
 ```
