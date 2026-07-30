@@ -230,8 +230,9 @@ adb shell am force-stop com.example.app                      # 强杀后重开�
 前置条件：Magisk（自带 Zygisk），或 KernelSU / APatch 加装 ZygiskNext。
 `zygisk status` 会把缺哪一环说清楚。
 
-> 为什么必须这么做、而不是改 `ro.debuggable` 或重打包重签名，
-> 见 [docs/p0-path-findings.md](docs/p0-path-findings.md)。
+> 未改造的第三方 release 包（Element X，官方签名、无 debuggable 标记）经此路径成功调试的
+> 完整实测见 [docs/zygisk-thirdparty-findings.md](docs/zygisk-thirdparty-findings.md)；
+> 为什么不改 `ro.debuggable` 或重打包重签名，见 [docs/p0-path-findings.md](docs/p0-path-findings.md)。
 
 ## 打包成桌面应用
 

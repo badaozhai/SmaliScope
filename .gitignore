@@ -1,6 +1,9 @@
 build/
 .gradle/
 testapp/build/
+zygisk/obj/
+zygisk/libs/
+zygisk/build/
 *.log
 
 # IDE

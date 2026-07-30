@@ -53,7 +53,7 @@ M1–M8 已实现并在模拟器上实测通过（见 README）。本文件记�
 ## 2. ~~Zygisk 模块：逐应用打 FLAG_DEBUGGABLE~~ ✅ 已完成并真机验证
 
 在一台 Redmi（Android 14、`build.type=user`、`ro.debuggable=0`、KernelSU + ZygiskNext）上
-端到端跑通：装模块 → 重启 → 把一个**未经任何改造的** release 包（Element X，官方签名、
+端到端跑通（可复现实证见 [docs/zygisk-thirdparty-findings.md](docs/zygisk-thirdparty-findings.md)）：装模块 → 重启 → 把一个**未经任何改造的** release 包（Element X，官方签名、
 manifest 里没有 DEBUGGABLE）加入名单 → 强杀重启 → 它出现在 `adb jdwp` 里 →
 断点命中 `Application.onCreate` → 指令级单步 → 读到寄存器实时值
 （`v0` = `AppInitializer@12`、`v1` = `Class@14`）。
