@@ -216,6 +216,40 @@ class Debugger(
         return sess.addBreakpoint(fqcn, method, signature, dexPc)
     }
 
+    // ── 预设断点模板 ────────────────────────────────────────────────────────
+
+    data class BpTemplate(val id: String, val label: String, val count: Int, val hint: String?)
+
+    /** 从静态结构里算出可用的模板（数量为 0 的不返回）。 */
+    fun breakpointTemplates(): List<BpTemplate> {
+        val index = apk ?: return emptyList()
+        val out = ArrayList<BpTemplate>()
+        val acts = index.activityOnCreates()
+        if (acts.isNotEmpty()) {
+            out += BpTemplate("activity-oncreate", "所有 Activity 的 onCreate", acts.size,
+                "界面创建的入口，最常用来「应用一打开就断住」")
+        }
+        if (index.applicationOnCreate() != null) {
+            out += BpTemplate("application-oncreate", "Application.onCreate", 1,
+                "应用最早的自有代码，比任何 Activity 都先执行")
+        }
+        return out
+    }
+
+    /** 应用一个模板：把断点下到对应方法的 dex_pc 0，返回新加的断点。 */
+    fun applyTemplate(id: String): List<BreakpointView> {
+        val index = apk ?: error("请先载入要调试的应用")
+        val targets = when (id) {
+            "activity-oncreate" -> index.activityOnCreates()
+            "application-oncreate" -> listOfNotNull(index.applicationOnCreate())
+            else -> error("未知模板：$id")
+        }
+        return targets.mapNotNull { ref ->
+            val pc = index.model(ref)?.instructions?.firstOrNull()?.dexPc ?: return@mapNotNull null
+            addBreakpoint(ref.fqcn, ref.name, ref.signature, pc)
+        }
+    }
+
     fun removeBreakpoint(id: Int) {
         session?.removeBreakpoint(id)
     }

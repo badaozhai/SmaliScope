@@ -152,6 +152,29 @@ object Tools {
         },
 
         Tool(
+            "set_breakpoint_template",
+            "一键在常见入口批量下断点，省去自己翻类名。可用模板由 list_apps 之后的 load_app 决定：" +
+                "activity-oncreate（所有 Activity 的 onCreate）、application-oncreate（Application.onCreate，" +
+                "应用最早的自有代码）。不带 id 时列出当前应用可用的模板及各自会下多少个断点。",
+            schema(prop("id", "string", "模板 id；留空则只列出可用模板")),
+        ) { dbg, a ->
+            val id = a["id"]?.string
+            if (id.isNullOrBlank()) {
+                val t = dbg.breakpointTemplates()
+                if (t.isEmpty()) "当前应用没有可用模板（可能没有 Activity/Application 子类，或还没 load_app）"
+                else "可用模板：\n" + t.joinToString("\n") {
+                    "  ${it.id}  ——  ${it.label}（${it.count} 个）" + (it.hint?.let { h -> "；$h" } ?: "")
+                }
+            } else {
+                val added = dbg.applyTemplate(id)
+                if (added.isEmpty()) "模板 $id 没有匹配到任何方法"
+                else "已下 ${added.size} 个断点：\n" + added.joinToString("\n") {
+                    "  #${it.id} ${it.fqcn}.${it.method} @ ${it.dexPc}  ${it.state}"
+                }
+            }
+        },
+
+        Tool(
             "list_breakpoints",
             "列出当前所有断点及其状态与命中次数。",
             schema(),

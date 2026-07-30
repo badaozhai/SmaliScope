@@ -62,6 +62,8 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         server.createContext("/api/bp") { ex -> handle(ex) { json(ex, addBp(query(ex))) } }
         server.createContext("/api/bp/remove") { ex -> handle(ex) { json(ex, removeBp(query(ex))) } }
         server.createContext("/api/breakpoints") { ex -> handle(ex) { json(ex, breakpoints()) } }
+        server.createContext("/api/templates") { ex -> handle(ex) { json(ex, templates()) } }
+        server.createContext("/api/template") { ex -> handle(ex) { json(ex, applyTemplate(query(ex))) } }
         server.createContext("/api/start") { ex -> handle(ex) { dbg.startAsync(); json(ex, ok()) } }
         server.createContext("/api/control") { ex ->
             handle(ex) { dbg.control(query(ex)["action"] ?: error("缺少 action")); json(ex, ok()) }
@@ -166,6 +168,21 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
     }
 
     private fun breakpoints(): String = Json.arr(dbg.breakpoints().map { Json.of(it) })
+
+    private fun templates(): String = Json.arr(dbg.breakpointTemplates().map {
+        Json.obj(
+            "id" to Json.str(it.id),
+            "label" to Json.str(it.label),
+            "count" to Json.num(it.count),
+            "hint" to Json.str(it.hint),
+        )
+    })
+
+    private fun applyTemplate(q: Map<String, String>): String {
+        val added = dbg.applyTemplate(q["id"] ?: error("缺少 id"))
+        sse.send("breakpoints", breakpoints())
+        return Json.obj("ok" to Json.bool(true), "added" to Json.num(added.size))
+    }
 
     private fun expand(q: Map<String, String>): String {
         val id = q["id"]?.toLongOrNull() ?: error("缺少 id")

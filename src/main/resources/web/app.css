@@ -211,6 +211,11 @@ main { flex: 1; display: flex; min-height: 0; overflow-x: auto; }
 .tl-reg.changed { border-color: var(--cur); color: var(--cur); }
 
 /* 断点表 */
+/* 预设断点模板栏 */
+.tpl-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.tpl-label { font-size: 12px; color: var(--fg-dim); }
+.tpl-btn { font-size: 12px; padding: 4px 10px; background: #23384f; border-color: #2e4a68; color: #cfe6ff; }
+
 .bprow { display: grid; grid-template-columns: 1fr 90px 70px 60px; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1f242c; font-size: 13px; }
 .bprow .st-pending { color: var(--write); }
 .bprow .st-active { color: var(--ok); }

@@ -106,18 +106,16 @@ class DebugSession(
 
         adb.shell(serial, "am clear-debug-app")
         adb.shell(serial, "am force-stop $pkg")
+        // force-stop 是异步的：AMS 要花一点时间真正回收上一个进程记录。
+        // 紧接着就 set-debug-app + start，偶尔会赶在回收完成之前，导致新进程
+        // 没被打上「等待调试器」的标记、直接跑过断点——表现就是「偶发超时」。
+        // 等进程真正消失（最多 ~2s）再往下走，把这个竞态去掉。
+        waitForProcessGone(apps, 2_000)
         // -w：应用启动后停住等调试器接入
         adb.shell(serial, "am set-debug-app -w $pkg")
         log("已设置 $pkg 启动时等待调试器")
 
-        val component = resolveLauncher(pkg)
-        if (component != null) {
-            adb.shell(serial, "am start -n $component")
-            log("已启动 $component")
-        } else {
-            adb.shell(serial, "monkey -p $pkg -c android.intent.category.LAUNCHER 1")
-            log("已通过默认入口启动 $pkg")
-        }
+        launchApp(pkg)
 
         val pid = waitForDebuggablePid(apps, timeoutMs)
             ?: run {
@@ -176,6 +174,38 @@ class DebugSession(
     }
 
     private fun JdwpConnection.version() = VirtualMachine(this).version()
+
+    /**
+     * 启动应用，并检查 `am start` 是否真的把它拉起来了。
+     * `am start` 失败时会把错误写在 stdout（`Error: ...`、`Warning: Activity not started`）
+     * 却仍以 0 退出，如果不看这行，失败就会被后面的等待逻辑吞成一句「超时」。
+     * 组件方式失败时退回 monkey（对某些厂商 ROM 更稳）。
+     */
+    private fun launchApp(pkg: String) {
+        val component = resolveLauncher(pkg)
+        if (component != null) {
+            val out = adb.shell(serial, "am start -n $component")
+            if (out.contains("Error:") || out.contains("does not exist")) {
+                log("am start 失败（$component）：${out.trim().lines().firstOrNull { it.contains("Error") } ?: out.trim()}，改用默认入口重试")
+                adb.shell(serial, "monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+                log("已通过默认入口启动 $pkg")
+            } else {
+                log("已启动 $component")
+            }
+        } else {
+            adb.shell(serial, "monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+            log("已通过默认入口启动 $pkg")
+        }
+    }
+
+    /** 等目标进程真正消失（force-stop 是异步的）。超时就直接返回，不阻断流程。 */
+    private fun waitForProcessGone(apps: DeviceApps, timeoutMs: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (apps.pidOf(pkg) == null) return
+            Thread.sleep(100)
+        }
+    }
 
     private fun resolveLauncher(pkg: String): String? {
         val out = adb.shell(

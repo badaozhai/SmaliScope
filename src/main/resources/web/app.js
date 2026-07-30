@@ -8,6 +8,7 @@ const S = {
   view: null,          // 当前方法的 MethodView
   state: null,         // 内核推来的 DebugState
   bps: [],
+  templates: [],       // 预设断点模板（随应用变化）
   timeline: [],
   replaying: null,     // 时间线回放时选中的快照
   prevValues: {},      // 上一步的寄存器值，用来显示「旧值残影」
@@ -96,6 +97,7 @@ async function restore(pkg) {
   const sel = $('#appSelect');
   for (const o of sel.options) if (o.value === pkg) sel.value = pkg;
   await loadClasses();
+  await loadTemplates();
   await refreshBps();
   const st = await get('/api/state').catch(() => null);
   // applyState 在挂起时会自动把代码视图切到当前所在的方法。
@@ -111,9 +113,15 @@ async function loadApp() {
     S.pkg = pkg;
     hint(`已载入 ${pkg}（${r.classCount} 个类）。选一个类和方法，在指令左侧点圆点下断点，然后点「开始调试」。`);
     await loadClasses();
+    await loadTemplates();
   } catch (e) {
     hint('载入失败：' + e.message, 'error');
   }
+}
+
+async function loadTemplates() {
+  S.templates = await get('/api/templates').catch(() => []);
+  renderBreakpoints();
 }
 
 async function loadClasses() {
@@ -578,7 +586,26 @@ async function refreshTimeline() {
 function renderBreakpoints() {
   const panel = $('#panel-bp');
   panel.innerHTML = '';
-  if (!S.bps.length) { panel.appendChild(el('div', 'empty', '尚未设置断点。')); return; }
+
+  // 预设模板：新手不必自己翻类名找入口，一键把断点下到常见位置。
+  if (S.templates && S.templates.length) {
+    const bar = el('div', 'tpl-bar');
+    bar.appendChild(el('span', 'tpl-label', '一键断在：'));
+    for (const t of S.templates) {
+      const btn = el('button', 'tpl-btn', `${t.label}（${t.count}）`);
+      if (t.hint) btn.title = t.hint;
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try { await api('/api/template', { id: t.id }); await refreshBps(); }
+        catch (e) { hint('套用模板失败：' + e.message, 'error'); }
+        finally { btn.disabled = false; }
+      };
+      bar.appendChild(btn);
+    }
+    panel.appendChild(bar);
+  }
+
+  if (!S.bps.length) { panel.appendChild(el('div', 'empty', '尚未设置断点。可以用上面的模板一键下断点。')); return; }
   const head = el('div', 'bprow');
   ['位置', '状态', '命中次数', ''].forEach(h => head.appendChild(el('div', null, h)));
   panel.appendChild(head);
@@ -653,13 +680,17 @@ function applyState(st) {
   if (suspended && st.frames.length) {
     const f = st.frames[0];
     if (f.hasModel && (f.fqcn !== S.cls || f.method !== S.method || f.signature !== S.sig)) {
-      openMethodFromFrame(f).then(() => refreshTimeline());
+      openMethodFromFrame(f).then(() => { if (timelineVisible()) refreshTimeline(); });
       return;
     }
   }
-  if (S.view) refreshMethodView().then(() => { if (suspended) refreshTimeline(); });
-  else if (suspended) refreshTimeline();
+  // 时间线在单步时是实时增长的，但只有它当前可见才重建 DOM——
+  // 隐藏时白建看不到，切回该标签时会重新拉（见 tab 点击处）。
+  if (S.view) refreshMethodView().then(() => { if (suspended && timelineVisible()) refreshTimeline(); });
+  else if (suspended && timelineVisible()) refreshTimeline();
 }
+
+const timelineVisible = () => $('#panel-timeline').classList.contains('active');
 
 // ── 悬浮解释 ─────────────────────────────────────────────────────────────
 function showTip(e, text) {
