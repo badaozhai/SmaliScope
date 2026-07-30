@@ -12,6 +12,8 @@ M1–M8 已全部实现并在模拟器上实测通过，M9 只差打包发布。
 
 ```bash
 ./gradlew installDist                              # 构建（产物在 build/install/smaliscope/）
+./gradlew packageApp                               # 打成自带 JRE 的本平台安装包（jpackage）
+./zygisk/build.sh                                  # 编译 Zygisk 模块（需 NDK）
 ./gradlew test                                     # 单元测试（不需要设备）
 ./testapp/build.sh                                 # 构建自带的 debuggable 测试 APK
 python3 scripts/e2e.py                             # Web 侧端到端回归（需设备 + 工作台已启动）
@@ -123,6 +125,11 @@ python3 scripts/mcp-e2e.py                         # MCP 侧端到端回归（�
 
 - **文档与所有用户可见文案用中文**；UI 层不暴露 dex_pc / JDWP tag / slot / ClassPrepare 这些词，
   只说「行 / 寄存器 / 类型」。错误提示给中文的下一步指引，不是英文异常栈。
+- **`su` 的语法不统一，别硬编码 `su -c`**：Magisk / KernelSU / APatch 认 `su -c '<cmd>'`，
+  而 AOSP userdebug 自带的 su 是 `su [用户] [命令]`，喂 `-c` 会报 invalid uid/gid。
+  统一走 `AdbClient.suShell`（探测一次并缓存，兜底用两边都认的 `su root sh -c`）。
+  另外**探测 root 方案与 Zygisk 必须经 su**：`/data/adb` 只有 root 能读，
+  普通 shell 会静默拿到空结果从而误判成「没装」。
 - **可选的大模型功能必须保持「没配 key 就不存在」**：`config/Settings.kt` 读
   `~/.smaliscope/config.properties`（环境变量优先），`llm.enabled` 为假时
   Web 界面不显示标签页、MCP 不注册 `explain_code` / `suggest_register_names`。

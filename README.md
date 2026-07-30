@@ -222,6 +222,19 @@ adb shell am force-stop com.example.app                      # 强杀后重开�
 > 为什么必须这么做、而不是改 `ro.debuggable` 或重打包重签名，
 > 见 [docs/p0-path-findings.md](docs/p0-path-findings.md)。
 
+## 打包成桌面应用
+
+```bash
+./gradlew packageApp     # → build/jpackage/，自带 JRE，双击即用
+```
+
+用 JDK 自带的 jpackage，不引第三方打包插件。**只能出当前平台的包**：
+mac 上 `.dmg`、Windows 上 `.msi`、Linux 上 `.deb`；三平台齐活要在三个系统各跑一次。
+双击启动即打开工作台，不需要预装 JDK 或 Gradle。
+
+adb 仍需系统里有：工具会在 `ANDROID_SDK_ROOT` / `PATH` / 各平台默认 SDK 路径下找 adb
+并自动 `start-server`，找不到才报错并给出中文指引。
+
 ## 测试
 
 ```bash
@@ -256,7 +269,7 @@ python3 scripts/mcp-e2e.py
 | M6 | 指令级单步（自研后继计算，不用 JDWP 原生 STEP）+ 寄存器 diff | ✅ |
 | M7 | jadx Java 视图 + smali 指令中文词典悬浮解释 | ✅ |
 | M8 | 执行指针、寄存器高亮、数据流、CFG 走过路径、调用栈、对象图、时间线 | ✅ |
-| M9 | 中文错误引导 ✅ / jpackage 三平台打包 ❌ | 部分 |
+| M9 | 中文错误引导 + jpackage 打包（自带 JRE，双击即用） | ✅ |
 | — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
 | — | Zygisk 模块：给名单里的应用打可调试标记，原 APK 不动 | ✅ |
 
@@ -285,7 +298,9 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
   下断点命中」这一步还没实测过。装 Zygisk 模块有让设备无法启动的风险，
   需要使用者自行决定是否在自己的设备上验证。
 - 寄存器写入、条件断点、表达式求值（设计方案里本就列为二期）。
-- jpackage 打包与 platform-tools 自动下载。
+- **platform-tools 自动下载**。现在的做法是：连不上 adb server 时自动在常见位置找 adb 并
+  拉起它（`ANDROID_SDK_ROOT`、`PATH`、各平台默认 SDK 路径），找不到才报错并给出中文指引。
+  刻意没做「自动联网下载」——那要替用户决定下载什么，留给使用者自己装。
 
 ## 与设计方案的偏差
 

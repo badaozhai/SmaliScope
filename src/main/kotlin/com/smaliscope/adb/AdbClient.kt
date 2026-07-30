@@ -25,13 +25,72 @@ class AdbClient(
         val isEmulator: Boolean get() = serial.startsWith("emulator-")
     }
 
+    // 只尝试拉起 adb server 一次：失败通常意味着环境缺东西，反复 fork 进程没有意义。
+    private val serverStartAttempted = java.util.concurrent.atomic.AtomicBoolean(false)
+
     // 不要写成 Socket().apply { connect(InetSocketAddress(host, port), …) }：
     // apply 块里的 port 会解析到 Socket.getPort()（未连接时为 0），而不是本类的字段。
     private fun open(timeoutMs: Int = 10_000): Socket {
+        try {
+            return connect(timeoutMs)
+        } catch (e: IOException) {
+            // 打包成桌面应用双击运行时，adb server 往往根本没起来。
+            // 这里主动拉一次再重试，而不是把「连不上 127.0.0.1:5037」这种话丢给用户。
+            if (!startServerOnce()) throw noServerError(e)
+            return try {
+                connect(timeoutMs)
+            } catch (e2: IOException) {
+                throw noServerError(e2)
+            }
+        }
+    }
+
+    private fun connect(timeoutMs: Int): Socket {
         val sock = Socket()
         sock.connect(InetSocketAddress(host, port), timeoutMs)
         sock.tcpNoDelay = true
         return sock
+    }
+
+    private fun noServerError(cause: IOException) = IOException(
+        "连不上 adb（$host:$port）。请确认已安装 Android platform-tools 并执行过 " +
+            "`adb start-server`；若用的是模拟器，先把模拟器启动起来。",
+        cause,
+    )
+
+    private fun startServerOnce(): Boolean {
+        if (!serverStartAttempted.compareAndSet(false, true)) return false
+        val adb = findAdbBinary() ?: return false
+        return runCatching {
+            val p = ProcessBuilder(adb.absolutePath, "start-server")
+                .redirectErrorStream(true).start()
+            p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)
+            // adb server 起来后要一小会儿才开始 listen
+            Thread.sleep(600)
+            true
+        }.getOrDefault(false)
+    }
+
+    /** 在常见位置找 adb。刻意不做「自动下载 platform-tools」——那要联网，留给使用者决定。 */
+    private fun findAdbBinary(): java.io.File? {
+        val name = if (System.getProperty("os.name").lowercase().contains("win")) "adb.exe" else "adb"
+        val candidates = ArrayList<java.io.File>()
+
+        System.getenv("ANDROID_SDK_ROOT")?.let { candidates += java.io.File(it, "platform-tools/$name") }
+        System.getenv("ANDROID_HOME")?.let { candidates += java.io.File(it, "platform-tools/$name") }
+        System.getenv("PATH")?.split(java.io.File.pathSeparator)?.forEach {
+            candidates += java.io.File(it, name)
+        }
+        val home = System.getProperty("user.home")
+        candidates += listOf(
+            "$home/Library/Android/sdk/platform-tools/$name",   // macOS 默认
+            "$home/Android/Sdk/platform-tools/$name",           // Linux 默认
+            "$home/AppData/Local/Android/Sdk/platform-tools/$name", // Windows 默认
+            "/usr/local/bin/$name",
+            "/opt/homebrew/bin/$name",
+        ).map { java.io.File(it) }
+
+        return candidates.firstOrNull { it.isFile && it.canExecute() }
     }
 
     private fun request(out: OutputStream, payload: String) {
@@ -91,7 +150,6 @@ class AdbClient(
             .toList()
     }
 
-    /** 选一台在线设备：优先模拟器（设计方案 §2.3 的 P0 零配置路径）。 */
     /**
      * 选设备：显式指定 → `ANDROID_SERIAL`（adb 的惯例）→ 只有一台就用它 →
      * 多台时优先模拟器。
