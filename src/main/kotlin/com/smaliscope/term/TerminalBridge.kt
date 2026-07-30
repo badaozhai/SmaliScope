@@ -30,9 +30,18 @@ class TerminalBridge(
     /**
      * 起 PTY。[onOutput] 收到 shell 的原始字节（含 ANSI）；[onExit] 在 shell 退出时回调。
      * 已经起着就先关掉再起（一个 bridge 一个会话）。
+     *
+     * @param bootCommand 终端就绪后自动执行的命令（如 `grok`），null 表示只给个 shell。
      */
     @Synchronized
-    fun start(cols: Int, rows: Int, onOutput: (ByteArray) -> Unit, onExit: () -> Unit) {
+    fun start(
+        cols: Int, rows: Int,
+        onOutput: (ByteArray) -> Unit,
+        onExit: () -> Unit,
+        bootCommand: String? = null,
+        /** 每次打开时算出来的环境变量（Key/地址可能刚在设置里改过，不能构造时定死）。 */
+        env: Map<String, String> = emptyMap(),
+    ) {
         close()
         cwd.mkdirs()
 
@@ -46,6 +55,7 @@ class TerminalBridge(
             put("TERM", "xterm-256color")
             put("LANG", System.getenv("LANG") ?: "en_US.UTF-8")
             extraEnv.forEach { (k, v) -> put(k, v) }
+            env.forEach { (k, v) -> put(k, v) }
         }
         val p = try {
             pb.start()
@@ -74,6 +84,15 @@ class TerminalBridge(
                 runCatching { onExit() }
             }
         }, "smaliscope-term-out").apply { isDaemon = true; start() }
+
+        // 自动执行开场命令（默认进 grok）。等一下让 shell 把 rc 文件读完、提示符画出来，
+        // 否则命令会被 zsh 的初始化吃掉。
+        if (!bootCommand.isNullOrBlank()) {
+            Thread({
+                Thread.sleep(700)
+                write("$bootCommand\n".toByteArray())
+            }, "smaliscope-term-boot").apply { isDaemon = true; start() }
+        }
     }
 
     /** 把前端的按键写进 PTY。 */

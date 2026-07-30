@@ -543,11 +543,16 @@ private fun cmdMcpInstall() {
 
 /**
  * 替换 TOML 里的一个 section；不存在就追加。
- * 只按「从 [name] 开始，到下一个顶层 [ 之前」这条规则改，不去解析整份 TOML——
- * 用户的配置里可能有我们不认识的内容，全量重写风险更大。
+ * 只按行改，不解析整份 TOML——用户配置里可能有我们不认识的内容，全量重写风险更大。
+ *
+ * ⚠️ 边界要把**子表**算进本段：`[mcp_servers.x]` 的下一段可能是
+ * `[mcp_servers.x.tool_timeouts]`，那是它的子表。早先的实现在任何 `[` 处就停，
+ * 于是替换 `[mcp_servers.x]` 时把子表留在后面、结构错乱，实测把用户的 MCP 配置弄丢过。
+ * 现在只在遇到「不属于本段的段头」时才结束。
  */
 internal fun replaceTomlSection(original: String, sectionName: String, replacement: String): String {
     val header = "[$sectionName]"
+    val childPrefix = "[$sectionName."          // 子表，如 [mcp_servers.x.tool_timeouts]
     val lines = original.lines()
     val start = lines.indexOfFirst { it.trim() == header }
     if (start < 0) {
@@ -556,7 +561,9 @@ internal fun replaceTomlSection(original: String, sectionName: String, replaceme
     }
     var end = lines.size
     for (i in start + 1 until lines.size) {
-        if (lines[i].trimStart().startsWith("[")) { end = i; break }
+        val t = lines[i].trimStart()
+        // 段头，且不是本段的子表 → 本段到此为止
+        if (t.startsWith("[") && !t.startsWith(childPrefix)) { end = i; break }
     }
     return (lines.subList(0, start) + replacement.lines() + lines.subList(end, lines.size))
         .joinToString("\n")

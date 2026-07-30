@@ -47,12 +47,32 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
     /** 终端连接代次：刷新页面会开新连接，用它避免旧连接的收尾把新终端关掉。 */
     private val termGen = java.util.concurrent.atomic.AtomicLong(0)
     private val termCwd = java.io.File(System.getProperty("user.home"), ".smaliscope/term-cwd")
-    private val term = com.smaliscope.term.TerminalBridge(
-        cwd = termCwd,
-        extraEnv = buildMap {
-            com.smaliscope.launcherDir()?.let { put("PATH", "$it${java.io.File.pathSeparator}${System.getenv("PATH") ?: ""}") }
-        },
-    )
+    private val term = com.smaliscope.term.TerminalBridge(cwd = termCwd, extraEnv = emptyMap())
+
+    /**
+     * 打开终端时注入的环境变量：把已配置的接口地址与 Key 直接给到终端里的 CLI，
+     * 免得用户每次自己 export。Key 只进子进程环境，不落盘。
+     *
+     * 各家认的变量名不同，一并给上：
+     * - grok：`XAI_API_KEY` 是它的全局 fallback（见其 custom-models 文档的凭证解析顺序）。
+     *   注意 grok 的 base_url **不吃环境变量**，必须写在 ~/.grok/config.toml 里，
+     *   所以另有 ensureGrokModelConfig() 负责那一半。
+     * - codex / 其它 OpenAI 兼容 CLI：认 `OPENAI_API_KEY` + `OPENAI_BASE_URL`。
+     */
+    private fun terminalEnv(): Map<String, String> = buildMap {
+        com.smaliscope.launcherDir()?.let {
+            put("PATH", "$it${java.io.File.pathSeparator}${System.getenv("PATH") ?: ""}")
+        }
+        val c = com.smaliscope.config.Settings.llm()
+        put("SMALISCOPE_LLM_BASE_URL", c.baseUrl)
+        put("OPENAI_BASE_URL", c.baseUrl)
+        put("SMALISCOPE_LLM_MODEL", c.model)
+        c.apiKey?.takeIf { it.isNotBlank() }?.let {
+            put("XAI_API_KEY", it)          // grok
+            put("OPENAI_API_KEY", it)       // codex 及其它 OpenAI 兼容 CLI
+            put("SMALISCOPE_LLM_API_KEY", it)
+        }
+    }
 
     init {
         dbg.onState = { st ->
@@ -305,9 +325,18 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         // 只有一个 term 实例，但可能被打开多次（刷新页面、重开）。用代次号认领：
         // 旧连接的收尾逻辑不能把新终端关掉——否则一刷新页面就「终端已退出」。
         val myGen = termGen.incrementAndGet()
+        ensureGrokModelConfig()   // grok 的 base_url 只能写配置文件，环境变量不吃
+        // 默认直接进 grok；`?boot=shell` 可以只要一个裸 shell。
+        val boot = when (q["boot"]) {
+            "shell", "none" -> null
+            null, "" -> "grok"
+            else -> q["boot"]
+        }
         term.start(cols, rows,
             onOutput = { bytes -> if (termGen.get() == myGen) emit("out", enc.encodeToString(bytes)) },
             onExit = { if (termGen.get() == myGen) { emit("exit", "{}"); runCatching { ex.close() } } },
+            bootCommand = boot,
+            env = terminalEnv(),
         )
         try {
             // 占住请求线程，SSE 不被关闭；顺便当断连探测。
@@ -321,6 +350,35 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
     }
 
     private fun readBody(ex: HttpExchange): ByteArray = ex.requestBody.use { it.readBytes() }
+
+    /**
+     * 往 `~/.grok/config.toml` 写/更新一个 `[model.smaliscope]` 块，让 grok 能用我们配置的接口地址。
+     *
+     * 为什么必须动配置文件：grok 的 **base_url 不吃环境变量**，只能写在 `[model.<id>]` 里
+     * （见其 custom-models 文档）。而 **Key 仍然只走环境变量**——这里用 `env_key`
+     * 指向 `XAI_API_KEY`，Key 本身绝不落盘。
+     *
+     * 只在用户确实配了 Key 时才写，否则不去动用户的 grok 配置。
+     */
+    private fun ensureGrokModelConfig() {
+        val c = com.smaliscope.config.Settings.llm()
+        if (!c.enabled) return
+        val cfg = java.io.File(System.getProperty("user.home"), ".grok/config.toml")
+        if (!cfg.parentFile.isDirectory) return   // 没装 grok，不生成
+        val section = """
+            [model.smaliscope]
+            model = "${c.model}"
+            base_url = "${c.baseUrl.trimEnd('/')}"
+            name = "SmaliScope (${c.model})"
+            env_key = "XAI_API_KEY"
+            api_backend = "chat_completions"
+        """.trimIndent()
+        runCatching {
+            val old = if (cfg.isFile) cfg.readText() else ""
+            val updated = com.smaliscope.replaceTomlSection(old, "model.smaliscope", section)
+            if (updated != old) cfg.writeText(updated)
+        }
+    }
 
     /**
      * 把当前调试上下文写进终端目录的 CONTEXT.md（功能②）。

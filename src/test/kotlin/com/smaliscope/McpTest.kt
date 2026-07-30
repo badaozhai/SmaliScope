@@ -99,6 +99,41 @@ class McpTest {
         assertEquals(1, Regex("\\[mcp_servers\\.smaliscope]").findAll(out).count(), "不能写重复的 section")
     }
 
+    /**
+     * 回归：替换一个带**子表**的 section 时，子表必须跟着一起被替换，
+     * 而且后面别的 section 不能被吞掉。
+     * 早先的实现在任何 `[` 处就断，结果把用户 grok 配置里的
+     * `[mcp_servers.smaliscope.tool_timeouts]` 留在原处、结构错乱——实测丢过配置。
+     */
+    @Test
+    fun `TOML 替换带子表的 section 时，子表一起换且不吞掉后续 section`() {
+        val original = """
+            [mcp_servers.ghidra]
+            command = "keep-ghidra"
+
+            [mcp_servers.smaliscope]
+            command = "旧路径"
+            enabled = true
+
+            [mcp_servers.smaliscope.tool_timeouts]
+            start_debug = 300
+            step = 180
+
+            [ui]
+            theme = "dark"
+        """.trimIndent()
+        val out = replaceTomlSection(
+            original, "mcp_servers.smaliscope",
+            "[mcp_servers.smaliscope]\ncommand = \"新路径\"\nenabled = true",
+        )
+        assertTrue(out.contains("keep-ghidra"), "别的 mcp server 不能被动")
+        assertTrue(out.contains("theme = \"dark\""), "后续 section 不能被吞掉")
+        assertTrue(out.contains("新路径") && !out.contains("旧路径"))
+        // 子表属于本段，应随替换一起消失（否则会留下孤立的子表）
+        assertTrue(!out.contains("tool_timeouts"), "子表应随本段一起被替换掉，不能残留")
+        assertEquals(1, Regex("\\[mcp_servers\\.smaliscope]").findAll(out).count())
+    }
+
     @Test
     fun `TOML 空配置也能写入`() {
         val out = replaceTomlSection("", "mcp_servers.smaliscope", "[mcp_servers.smaliscope]\ncommand = \"x\"")

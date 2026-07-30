@@ -861,7 +861,14 @@ function openTerminal() {
   const drawer = $('#termDrawer');
   drawer.classList.remove('hidden');
   if (TERM.term) { TERM.fit && TERM.fit.fit(); TERM.term.focus(); return; }
+  // 关键：必须等抽屉真的显示、布局算完，再 term.open()。
+  // 在还 hidden（clientHeight=0）的容器上 open()，xterm 的 DOM 渲染器建不出行内容——
+  // 表现为缓冲里明明有数据、屏幕却一片空白。所以整个创建过程都推迟两帧。
+  requestAnimationFrame(() => requestAnimationFrame(() => createTerminal()));
+}
 
+function createTerminal() {
+  if (TERM.term) return;
   const term = new Terminal({
     fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
     fontSize: 13, cursorBlink: true,
@@ -875,6 +882,7 @@ function openTerminal() {
 
   const dec = new TextDecoder();
   connectTerm(term.cols, term.rows);
+  term.focus();
 
   // 按键 → POST 给 PTY。必须串行：HTTP 请求不保序，并发会让「ls」变「sl」。
   let inQ = Promise.resolve();
@@ -887,7 +895,6 @@ function openTerminal() {
     get('/api/term/resize', { cols, rows }).catch(() => {});
   });
   window.addEventListener('resize', () => TERM.fit && TERM.fit.fit());
-  setTimeout(() => { fit.fit(); term.focus(); }, 50);
 
   function connectTerm(cols, rows) {
     const es = new EventSource(`/api/term/open?cols=${cols}&rows=${rows}`);
