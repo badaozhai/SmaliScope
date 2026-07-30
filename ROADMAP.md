@@ -68,3 +68,49 @@ manifest 里没有 DEBUGGABLE）加入名单 → 强杀重启 → 它出现在 `
 
 ---
 
+## 3. ~~jpackage 打包~~ ✅ 已完成
+
+`./gradlew packageApp` 用 JDK 自带的 jpackage 出自带 JRE 的本平台安装包，不引第三方打包插件。
+本轮实跑验证：产出 `build/jpackage/SmaliScope-1.0.0.dmg`（58MB，含 JRE），双击即用、不需预装 JDK。
+adb 仍需系统里有，工具会在 `ANDROID_SDK_ROOT` / `PATH` / 各平台默认 SDK 路径下自举 adb。
+限制：jpackage 只能出「当前平台」的包，Windows 的 `.msi`、Linux 的 `.deb` 要在对应系统各跑一次。
+
+---
+
+## 4. AI 能力
+
+### ~~标准 MCP server~~ ✅ 已完成
+
+`smaliscope mcp` 暴露 16 个工具供任何 MCP 客户端驱动调试，`smaliscope mcp-install` 一键注册。
+配了大模型接口后再多两个（`explain_code` / `suggest_register_names`），没配 key 时它们整个不出现。
+
+### ~~4.1 补全指令词典到覆盖全部 dex opcode~~ ✅ 已完成
+
+以 dexlib2 的 `Opcode` 枚举为权威全集，把 `dict/SmaliDict.kt` 补到
+**覆盖全部 224 条会出现在普通 APK dex 里的指令**（非 odex-only、非 payload）。
+`DictCoverageTest` 逐条断言覆盖率 100%，并抽样核对 20 条落到正确的族。
+
+与原计划两点有意偏差：
+- **逐条按 dex 指令集手写，没用模型生成**——opcode 语义稳定有限，手写比模型生成再挑错更可靠，
+  不烧 API 额度、无幻觉；
+- **保留在 Kotlin 里，没外置成 JSON**——词典是编译期常量，本就固化、零网络、零依赖，
+  外置反而多一条加载解析路径，与「少一个依赖少一层」相悖。
+
+顺带修了查找缺陷：`goto/16`、`filled-new-array/range` 这类「精确基名 + 变体」此前查不到解释，
+现把精确条目也纳入前缀索引。
+
+### 4.2 / 4.3 未做
+
+「解释这段 smali」按需摘要、给混淆包猜寄存器语义名——`explain/` 已具备能力
+（`explain_code` / `suggest_register_names` 就是），但仍限定在「让新手看懂」这条线上：
+不进单步热路径、不替代类型推导、不做安全判断。进一步的自动化（模型决定断点位置、
+自动找漏洞）明确不做。
+
+---
+
+## 零散项
+
+- 断点目前只能按 dex_pc 下；设计方案 §6 的「预设断点模板」（断在所有 Activity.onCreate）还没做。
+- 前端的时间线只在切到该标签时刷新，单步过程中不是实时增长的。
+- **偶发**：连着开新调试会话时断点等待偶尔超时，强杀目标应用后即恢复，尚未定位。
+

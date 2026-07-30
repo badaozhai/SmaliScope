@@ -279,7 +279,7 @@ python3 scripts/mcp-e2e.py
 | M4 | 断点引擎 + 类未加载时自动转 pending（CLASS_PREPARE 兜底） | ✅ |
 | M5 | 调用栈 / 寄存器读取 + MethodAnalyzer 类型推导 + 对象图 | ✅ |
 | M6 | 指令级单步（自研后继计算，不用 JDWP 原生 STEP）+ 寄存器 diff | ✅ |
-| M7 | jadx Java 视图 + smali 指令中文词典悬浮解释 | ✅ |
+| M7 | jadx Java 视图 + smali 指令中文词典悬浮解释（覆盖全部 224 条 dex opcode） | ✅ |
 | M8 | 执行指针、寄存器高亮、数据流、CFG 走过路径、调用栈、对象图、时间线 | ✅ |
 | M9 | 中文错误引导 + jpackage 打包（自带 JRE，双击即用） | ✅ |
 | — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
@@ -356,7 +356,7 @@ src/main/kotlin/com/smaliscope/
   frame/        帧 / 寄存器 / 对象图读取
   session/      会话编排、设备与应用探测、推给前端的视图模型
   decompile/    jadx 按需反编译
-  dict/         smali 指令中文词典
+  dict/         smali 指令中文词典（覆盖全部 dex opcode，DictCoverageTest 守覆盖率）
   server/       本地 HTTP + SSE 工作台；极简 JSON 读写
   mcp/          标准 MCP server（JSON-RPC over stdio）与工具集
   config/       本地配置（大模型接口地址与 key）

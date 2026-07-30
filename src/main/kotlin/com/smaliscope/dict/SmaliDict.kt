@@ -5,6 +5,10 @@ package com.smaliscope.dict
  *
  * 查找顺序：先精确匹配整条指令名，再按前缀族匹配（如 add-int/lit8 落到 add-int 族），
  * 这样不必为每个变体各写一条。
+ *
+ * 覆盖率：`DictCoverageTest` 以 dexlib2 的 `Opcode` 枚举为权威全集，保证每一条会出现在
+ * 普通 APK dex 里的指令（即非 odex-only、非 payload）都能查到解释，共 224 条。
+ * 条目按 dex 指令集逐条编写并抽样核对，不走运行期网络——全部编译进包，零依赖零请求。
  */
 object SmaliDict {
 
@@ -35,6 +39,9 @@ object SmaliDict {
         "monitor-exit" to Entry("离开同步块，解锁"),
         "packed-switch" to Entry("按连续取值跳转的 switch"),
         "sparse-switch" to Entry("按离散取值跳转的 switch"),
+        // ART 优化后才出现的形式，正常反编译 APK 少见，列出以求完整：
+        "return-void-no-barrier" to Entry("方法结束不返回值（ART 优化形式，省去构造尾的内存屏障）"),
+        "invoke-object-init" to Entry("调用 Object 的空构造函数（ART 对 <init> 的优化形式）"),
     )
 
     /** 指令族前缀 → 解释。按前缀长度从长到短匹配。 */
@@ -45,6 +52,8 @@ object SmaliDict {
         "const-string" to Entry("把一个字符串常量放进寄存器"),
         "const-class" to Entry("把一个类对象放进寄存器"),
         "const-wide" to Entry("把一个 64 位常量放进寄存器（占相邻两个）"),
+        "const-method-handle" to Entry("把一个 MethodHandle 常量放进寄存器", "invoke-custom/lambda 相关"),
+        "const-method-type" to Entry("把一个 MethodType 常量放进寄存器", "invoke-custom/lambda 相关"),
         "const" to Entry("把一个常量放进寄存器", "最直观的一条：执行后能立刻看到该寄存器的值变成常量"),
 
         "invoke-virtual" to Entry("调用虚方法，按对象的实际类型分派",
@@ -91,20 +100,34 @@ object SmaliDict {
         "neg-int" to Entry("整数取负"),
         "not-int" to Entry("整数按位取反"),
 
+        // rsub 是「反向减」：结果 = 立即数 − 寄存器，专门给 a = C - x 这类式子
+        "rsub-int" to Entry("整数反向减：结果 = 立即数 − 寄存器", "对应源码里的 常量 - 变量"),
+
         "add-long" to Entry("长整数加法"), "sub-long" to Entry("长整数减法"),
         "mul-long" to Entry("长整数乘法"), "div-long" to Entry("长整数除法"),
         "rem-long" to Entry("长整数取余"),
+        "and-long" to Entry("长整数按位与"), "or-long" to Entry("长整数按位或"),
+        "xor-long" to Entry("长整数按位异或"),
+        "shl-long" to Entry("长整数左移"), "shr-long" to Entry("长整数算术右移"),
+        "ushr-long" to Entry("长整数逻辑右移"),
+        "neg-long" to Entry("长整数取负"), "not-long" to Entry("长整数按位取反"),
+
         "add-float" to Entry("单精度浮点加法"), "sub-float" to Entry("单精度浮点减法"),
         "mul-float" to Entry("单精度浮点乘法"), "div-float" to Entry("单精度浮点除法"),
+        "rem-float" to Entry("单精度浮点取余"), "neg-float" to Entry("单精度浮点取负"),
         "add-double" to Entry("双精度浮点加法"), "sub-double" to Entry("双精度浮点减法"),
         "mul-double" to Entry("双精度浮点乘法"), "div-double" to Entry("双精度浮点除法"),
+        "rem-double" to Entry("双精度浮点取余"), "neg-double" to Entry("双精度浮点取负"),
 
         "int-to-long" to Entry("int 转 long"), "int-to-float" to Entry("int 转 float"),
         "int-to-double" to Entry("int 转 double"), "int-to-byte" to Entry("int 截断为 byte"),
         "int-to-char" to Entry("int 转 char"), "int-to-short" to Entry("int 截断为 short"),
         "long-to-int" to Entry("long 截断为 int"), "long-to-float" to Entry("long 转 float"),
         "long-to-double" to Entry("long 转 double"),
-        "float-to-int" to Entry("float 转 int（截断小数）"), "double-to-int" to Entry("double 转 int（截断小数）"),
+        "float-to-int" to Entry("float 转 int（截断小数）"), "float-to-long" to Entry("float 转 long（截断小数）"),
+        "float-to-double" to Entry("float 转 double"),
+        "double-to-int" to Entry("double 转 int（截断小数）"), "double-to-long" to Entry("double 转 long（截断小数）"),
+        "double-to-float" to Entry("double 转 float（可能丢精度）"),
 
         "cmpl-float" to Entry("比较两个 float，NaN 时返回 -1"),
         "cmpg-float" to Entry("比较两个 float，NaN 时返回 1"),
@@ -113,12 +136,21 @@ object SmaliDict {
         "cmp-long" to Entry("比较两个 long，结果为 -1/0/1"),
     )
 
-    private val sortedFamilies = families.sortedByDescending { it.first.length }
+    // 前缀匹配的候选：指令族 + 精确条目一起纳入，都按长度从长到短排。
+    // 把精确条目也当前缀，是为了让 goto/16、filled-new-array/range 这类
+    // 「精确基名 + 变体」也能落到基名的解释上——否则它们查不到。
+    // dex 的变体后缀有两种分隔符：`/`（/2addr、/lit8、/range、/16、/high16…）
+    // 和 `-`（字段/数组访问的类型变体，如 iget-object、aget-wide）。两种都要认。
+    // 靠「长前缀优先」避免误伤：const-method-handle 排在 const 前面，先被命中。
+    private val prefixIndex: List<Pair<String, Entry>> =
+        (families + exact.toList()).sortedByDescending { it.first.length }
 
     fun lookup(opcodeName: String): Entry? {
         exact[opcodeName]?.let { return it }
-        return sortedFamilies.firstOrNull { (prefix, _) ->
-            opcodeName == prefix || opcodeName.startsWith("$prefix/") || opcodeName.startsWith("$prefix-")
+        return prefixIndex.firstOrNull { (prefix, _) ->
+            opcodeName == prefix ||
+                opcodeName.startsWith("$prefix/") ||
+                opcodeName.startsWith("$prefix-")
         }?.second
     }
 
