@@ -21,7 +21,7 @@ import kotlin.concurrent.withLock
 class Debugger(
     private val cacheDir: File,
     private val adb: AdbClient = AdbClient(),
-) : AutoCloseable {
+) : DebugFacade, AutoCloseable {
 
     data class AppEntry(val pkg: String, val pid: Int?, val debuggable: Boolean)
 
@@ -35,7 +35,7 @@ class Debugger(
     )
 
     @Volatile var serial: String? = null; private set
-    @Volatile var pkg: String? = null; private set
+    @Volatile override var pkg: String? = null; private set
     @Volatile var apk: ApkIndex? = null; private set
     @Volatile private var session: DebugSession? = null
     @Volatile private var jadx: JadxService? = null
@@ -50,7 +50,7 @@ class Debugger(
     private val stopCond = stopLock.newCondition()
 
     @Volatile
-    var state: DebugState = DebugState("idle", "尚未开始调试")
+    override var state: DebugState = DebugState("idle", "尚未开始调试")
         private set
 
     /**
@@ -67,7 +67,7 @@ class Debugger(
      *   只有一台就用它 → 多台时优先模拟器 的顺序决定。
      *   插着手机又开着模拟器是很常见的情形，不给选择权的话用户会一直连到不想连的那台。
      */
-    fun bootstrap(want: String? = null): Bootstrap {
+    override fun bootstrap(want: String?): Bootstrap {
         val devices = adb.devices().filter { it.isOnline }
         if (devices.isEmpty()) {
             return Bootstrap(
@@ -107,7 +107,7 @@ class Debugger(
     }
 
     /** 选定应用：拉 APK、静态分析、建会话（此时还没连上进程）。 */
-    fun loadApp(packageName: String): Int {
+    override fun loadApp(packageName: String): Int {
         val s = serial ?: bootstrap().serial ?: error("未发现在线设备")
         session?.let { runCatching { it.close() } }
         runCatching { jadx?.close() }
@@ -150,7 +150,7 @@ class Debugger(
 
     // ── 静态浏览 ────────────────────────────────────────────────────────────
 
-    fun classNames(filter: String? = null, limit: Int = 500): List<String> {
+    override fun classNames(filter: String?, limit: Int): List<String> {
         val index = apk ?: return emptyList()
         val own = index.appClassNames(pkg?.substringBeforeLast('.')?.takeIf { it.isNotBlank() })
             .ifEmpty { index.appClassNames() }
@@ -158,14 +158,14 @@ class Debugger(
         return (if (f.isNullOrBlank()) own else own.filter { it.lowercase().contains(f) }).take(limit)
     }
 
-    fun methodsOf(fqcn: String): List<Triple<String, String, Int>> {
+    override fun methodsOf(fqcn: String): List<Triple<String, String, Int>> {
         val index = apk ?: return emptyList()
         return index.concreteMethodsOf(fqcn).map {
             Triple(it.name, it.signature, index.model(it)?.instructions?.size ?: 0)
         }
     }
 
-    fun methodView(fqcn: String, method: String, signature: String, pc: Int?): MethodView? {
+    override fun methodView(fqcn: String, method: String, signature: String, pc: Int?): MethodView? {
         session?.methodView(fqcn, method, signature, pc)?.let { return it }
         // 还没建会话时也能浏览 smali（此时没有「走过的路」信息）。
         val m = apk?.model(fqcn, method, signature) ?: return null
@@ -187,19 +187,19 @@ class Debugger(
     }
 
     /** 解析用户给的类名：允许只写简名（如 Calc）。 */
-    fun resolveClass(name: String): String? {
+    override fun resolveClass(name: String): String? {
         val index = apk ?: return null
         return index.classNames().firstOrNull { it == name || it.endsWith(".$name") }
     }
 
     /** 解析方法：不给签名时取第一个有实现的重载。 */
-    fun resolveMethod(fqcn: String, method: String, signature: String?): String? {
+    override fun resolveMethod(fqcn: String, method: String, signature: String?): String? {
         val index = apk ?: return null
         if (signature != null) return signature
         return index.concreteMethodsOf(fqcn).firstOrNull { it.name == method }?.signature
     }
 
-    fun javaSource(fqcn: String): Pair<String?, String?> {
+    override fun javaSource(fqcn: String): Pair<String?, String?> {
         val svc = jadx ?: return null to "请先载入应用"
         val code = svc.javaOf(fqcn)
         return code to (
@@ -211,16 +211,16 @@ class Debugger(
 
     // ── 断点与执行控制 ──────────────────────────────────────────────────────
 
-    fun addBreakpoint(
+    override fun addBreakpoint(
         fqcn: String, method: String, signature: String, dexPc: Int,
-        condition: BpCondition? = null,
+        condition: BpCondition?,
     ): BreakpointView {
         val sess = session ?: error("请先载入要调试的应用")
         return sess.addBreakpoint(fqcn, method, signature, dexPc, condition)
     }
 
     /** 给已存在的断点设/清条件（二期）。 */
-    fun setBreakpointCondition(id: Int, condition: BpCondition?): Boolean {
+    override fun setBreakpointCondition(id: Int, condition: BpCondition?): Boolean {
         val sess = session ?: error("请先载入要调试的应用")
         return sess.setBreakpointCondition(id, condition)
     }
@@ -230,7 +230,7 @@ class Debugger(
     data class BpTemplate(val id: String, val label: String, val count: Int, val hint: String?)
 
     /** 从静态结构里算出可用的模板（数量为 0 的不返回）。 */
-    fun breakpointTemplates(): List<BpTemplate> {
+    override fun breakpointTemplates(): List<BpTemplate> {
         val index = apk ?: return emptyList()
         val out = ArrayList<BpTemplate>()
         val acts = index.activityOnCreates()
@@ -246,7 +246,7 @@ class Debugger(
     }
 
     /** 应用一个模板：把断点下到对应方法的 dex_pc 0，返回新加的断点。 */
-    fun applyTemplate(id: String): List<BreakpointView> {
+    override fun applyTemplate(id: String): List<BreakpointView> {
         val index = apk ?: error("请先载入要调试的应用")
         val targets = when (id) {
             "activity-oncreate" -> index.activityOnCreates()
@@ -259,14 +259,14 @@ class Debugger(
         }
     }
 
-    fun removeBreakpoint(id: Int) {
+    override fun removeBreakpoint(id: Int) {
         session?.removeBreakpoint(id)
     }
 
-    fun breakpoints(): List<BreakpointView> = session?.listBreakpoints() ?: emptyList()
+    override fun breakpoints(): List<BreakpointView> = session?.listBreakpoints() ?: emptyList()
 
     /** 挂起启动并 attach。阻塞直到 attach 完成（不等断点命中）。 */
-    fun start() {
+    override fun start() {
         val sess = session ?: error("请先载入要调试的应用")
         sess.launchSuspended()
     }
@@ -282,7 +282,7 @@ class Debugger(
         }, "smaliscope-launch").start()
     }
 
-    fun control(action: String) {
+    override fun control(action: String) {
         val sess = session ?: error("尚未开始调试")
         when (action) {
             "resume" -> sess.resume()
@@ -309,7 +309,7 @@ class Debugger(
      * 发起一个动作，然后等它停下来。
      * MCP 侧的 agent 没有事件流，一次请求就该拿到结果，否则它得自己轮询。
      */
-    fun actAndWait(timeoutMs: Long, action: () -> Unit): DebugState? {
+    override fun actAndWait(timeoutMs: Long, action: () -> Unit): DebugState? {
         val seq = currentStopSeq()
         action()
         return awaitStopAfter(seq, timeoutMs)
@@ -330,7 +330,7 @@ class Debugger(
     private fun explainer(): com.smaliscope.explain.Explainer =
         explainerRef ?: com.smaliscope.explain.Explainer(this).also { explainerRef = it }
 
-    fun llmEnabled(): Boolean = com.smaliscope.config.Settings.llm().enabled
+    override fun llmEnabled(): Boolean = com.smaliscope.config.Settings.llm().enabled
 
     /** 配置变更后丢弃旧客户端。 */
     fun reloadLlm() { explainerRef = null }
@@ -353,18 +353,18 @@ class Debugger(
     /** 用当前配置做一次连通性自检，返回模型回话或抛出可读原因。 */
     fun testLlm(): String = com.smaliscope.explain.LlmClient().ping()
 
-    fun explain(fqcn: String, method: String, signature: String, dexPc: Int?): String =
+    override fun explain(fqcn: String, method: String, signature: String, dexPc: Int?): String =
         explainer().explainMethod(fqcn, method, signature, dexPc)
 
-    fun nameRegisters(fqcn: String, method: String, signature: String): String =
+    override fun nameRegisters(fqcn: String, method: String, signature: String): String =
         explainer().nameRegisters(fqcn, method, signature)
 
-    fun expandObject(objectId: Long): ObjectNode? = session?.expandObject(objectId)
+    override fun expandObject(objectId: Long): ObjectNode? = session?.expandObject(objectId)
 
-    fun readFrame(depth: Int): FrameView? = session?.readFrame(depth)
+    override fun readFrame(depth: Int): FrameView? = session?.readFrame(depth)
 
     /** 写寄存器（二期）。返回改动后的栈顶帧。 */
-    fun writeRegister(depth: Int, reg: Int, text: String): FrameView {
+    override fun writeRegister(depth: Int, reg: Int, text: String): FrameView {
         val sess = session ?: error("尚未开始调试")
         return sess.writeRegister(depth, reg, text)
     }

@@ -358,9 +358,18 @@ private fun cmdAudit(args: List<String>) {
  * 所有面向人的输出都走 stderr。
  */
 private fun cmdMcp() {
+    // 本机已有工作台在跑就接上去，和用户界面共用同一个调试会话——
+    // 这样 agent 下的断点会点亮界面的断点面板，读寄存器读到的就是用户眼前那一帧。
+    // 否则各开一个 Debugger，是两个互不知情的平行调试器。
+    val remote = com.smaliscope.session.RemoteDebugger.discover()
+    if (remote != null) {
+        System.err.println("SmaliScope MCP server 已就绪（stdio）——已接入正在运行的工作台，与界面共用同一个调试会话")
+        com.smaliscope.mcp.McpServer(remote).serve(System.`in`, System.out)
+        return
+    }
     val dbg = com.smaliscope.session.Debugger(cacheDir)
     Runtime.getRuntime().addShutdownHook(Thread { runCatching { dbg.close() } })
-    System.err.println("SmaliScope MCP server 已就绪（stdio）")
+    System.err.println("SmaliScope MCP server 已就绪（stdio）——未发现工作台，使用独立调试会话")
     com.smaliscope.mcp.McpServer(dbg).serve(System.`in`, System.out)
 }
 

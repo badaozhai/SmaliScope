@@ -183,6 +183,11 @@ SmaliScope 实现了标准 **MCP**（Model Context Protocol），可以让 agent
 注意 `v2` 那行：读不出来时会**明确写出原因**，而不是给个 0 或 null——
 让模型把「不可读」误当成「值是 0」会导致它后续推理全错。
 
+**与界面共用同一个调试会话**：`smaliscope mcp` 启动时会探测本机是否已有工作台在跑
+（默认 `127.0.0.1:8080`）。探测到就把工具调用转发给它，于是 agent 下的断点会点亮界面里的
+断点面板、agent 读寄存器读到的就是你眼前那一帧——而不是各开一个平行的空调试器。
+探测不到才使用独立会话。
+
 > 这里刻意做的是**通用 MCP server**，不是给某一家 agent 定制的适配器。
 > MCP 是开放协议，做一次就能被 grok-build、Claude Code、Cursor 等任何客户端使用。
 
@@ -355,11 +360,13 @@ src/main/kotlin/com/smaliscope/
   breakpoint/   断点引擎 + pending 兜底 + 单步用的临时断点
   stepping/     指令级单步：后继计算 + 栈深校验
   frame/        帧 / 寄存器 / 对象图读取
-  session/      会话编排、设备与应用探测、推给前端的视图模型
+  session/      会话编排、设备与应用探测、视图模型；DebugFacade 接口 +
+                Debugger（进程内）/ RemoteDebugger（转发给工作台，共用会话）
   decompile/    jadx 按需反编译
   dict/         smali 指令中文词典（覆盖全部 dex opcode，DictCoverageTest 守覆盖率）
   server/       本地 HTTP + SSE 工作台；极简 JSON 读写
   mcp/          标准 MCP server（JSON-RPC over stdio）与工具集
+  term/         内嵌终端后端（python PTY 桥）
   config/       本地配置（大模型接口地址与 key）
   explain/      可选的大模型讲解：OpenAI 兼容客户端 + 提示词构造
 src/main/resources/web/    前端（无框架，原生 JS/CSS/SVG）

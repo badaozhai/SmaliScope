@@ -2,7 +2,7 @@ package com.smaliscope.mcp
 
 import com.smaliscope.server.Json
 import com.smaliscope.server.Jv
-import com.smaliscope.session.Debugger
+import com.smaliscope.session.DebugFacade
 
 /**
  * 暴露给 MCP 客户端的工具集。
@@ -19,7 +19,7 @@ object Tools {
         val schema: String,
         /** 需要 LLM 配置的工具，没配 key 时不注册——省得 agent 去调一个必然失败的工具。 */
         val requiresLlm: Boolean = false,
-        val run: (Debugger, Jv) -> String,
+        val run: (DebugFacade, Jv) -> String,
     )
 
     private fun prop(name: String, type: String, desc: String) =
@@ -408,12 +408,12 @@ object Tools {
 
     // ── 参数解析辅助 ────────────────────────────────────────────────────────
 
-    private fun resolveClass(dbg: Debugger, a: Jv): String {
+    private fun resolveClass(dbg: DebugFacade, a: Jv): String {
         val raw = a["class"]?.string ?: error("缺少 class")
         return dbg.resolveClass(raw) ?: error("找不到类 $raw（是否还没 load_app？可用 list_classes 查看）")
     }
 
-    private fun resolveMethod(dbg: Debugger, a: Jv): Triple<String, String, String> {
+    private fun resolveMethod(dbg: DebugFacade, a: Jv): Triple<String, String, String> {
         val fqcn = resolveClass(dbg, a)
         val name = a["method"]?.string ?: error("缺少 method")
         val sig = dbg.resolveMethod(fqcn, name, a["signature"]?.string)
@@ -433,7 +433,7 @@ object Tools {
         }
     )
 
-    fun dispatch(dbg: Debugger, name: String, args: Jv): String {
+    fun dispatch(dbg: DebugFacade, name: String, args: Jv): String {
         val tools = available()
         val tool = tools.firstOrNull { it.name == name }
             ?: if (TOOLS.any { it.name == name }) {

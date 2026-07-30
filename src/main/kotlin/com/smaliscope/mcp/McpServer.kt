@@ -4,7 +4,7 @@ import com.smaliscope.server.Json
 import com.smaliscope.server.JsonParse
 import com.smaliscope.server.Jv
 import com.smaliscope.session.DebugState
-import com.smaliscope.session.Debugger
+import com.smaliscope.session.DebugFacade
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.OutputStream
@@ -20,10 +20,11 @@ private const val DEFAULT_PROTOCOL = "2025-06-18"
  *
  * ⚠️ stdout 是协议通道，除了 JSON-RPC 消息不能往里写任何东西；所有日志一律走 stderr。
  */
-class McpServer(private val dbg: Debugger) {
+class McpServer(private val dbg: DebugFacade) {
 
     fun serve(input: InputStream, output: OutputStream) {
-        dbg.onLog = { System.err.println("[smaliscope] $it") }
+        // 日志回调只有进程内实现才有（远端模式下日志在工作台那边）。
+        (dbg as? com.smaliscope.session.Debugger)?.onLog = { System.err.println("[smaliscope] $it") }
         val reader = BufferedReader(input.reader(Charsets.UTF_8))
         val writer = output.writer(Charsets.UTF_8)
 
@@ -128,7 +129,7 @@ class McpServer(private val dbg: Debugger) {
 }
 
 /** 把停下来的状态渲染成给模型看的紧凑文本。 */
-internal fun renderStop(dbg: Debugger, st: DebugState?, prefix: String): String {
+internal fun renderStop(dbg: DebugFacade, st: DebugState?, prefix: String): String {
     if (st == null) {
         return "$prefix：等待超时，目标仍在运行。可能是断点没被执行到，" +
             "或者应用正等待用户操作。可以用 list_breakpoints 检查断点是否已生效。"
