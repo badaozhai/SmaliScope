@@ -153,6 +153,8 @@ main { flex: 1; display: flex; min-height: 0; overflow-x: auto; }
   border-radius: 3px; padding: 0 4px;
 }
 .reg .old { font-size: 11px; color: #8a7a4a; }
+.reg-edit { margin-left: auto; font-size: 11px; color: var(--accent); border: 1px solid #2e4a68; border-radius: 3px; padding: 0 5px; cursor: pointer; }
+.reg-edit:hover { background: #23384f; }
 
 @keyframes pulse {
   0%   { background: #4a3a12; }

@@ -145,6 +145,59 @@ class FrameReader(
         return null to if (ok) "该寄存器被复用，类型与声明不符，暂不可读" else "此位置不可读"
     }
 
+    /**
+     * 把用户输入写进某个寄存器（二期功能）。
+     *
+     * 只允许写类型能推出的寄存器——tag 沿用读时那一套，写错 tag 会静默破坏帧。
+     * 引用型只支持写 null（写任意对象需要一个有效 objectId，超出本期范围）。
+     * 写完不返回值：调用方会重新读一帧，让改动如实反映在各视图里。
+     */
+    fun writeRegister(
+        threadId: Long, frameId: Long, model: MethodModel?, dexPc: Int, reg: Int, text: String,
+    ) {
+        require(model != null) { "该方法没有静态模型，无法写寄存器" }
+        val kind = model.registerKindsAt(dexPc).getOrNull(reg)
+            ?: error("寄存器 v$reg 不存在")
+        require(!kind.isWideHigh) { "这是 ${model.regName(reg - 1)} 的高半部，请写它的低半部" }
+        val tag = kind.jdwpTag
+            ?: error("v$reg 在此处类型未定（${kind.cn}），不能写——猜 tag 会破坏帧")
+
+        val value = parseForKind(kind, tag, text.trim())
+        frames.setValues(threadId, frameId, listOf(Triple(reg, tag, value)))
+    }
+
+    /** 按寄存器的推导类型把文本解析成 JDWP 值。解析不了就抛出可读的中文原因。 */
+    private fun parseForKind(kind: RegKind, tag: Int, text: String): JdwpValue {
+        fun int(): Int =
+            if (text.startsWith("0x") || text.startsWith("-0x"))
+                text.replace("0x", "").toLong(16).toInt()
+            else text.toIntOrNull() ?: error("「$text」不是合法整数")
+        return when (tag) {
+            Tag.INT -> when (kind) {
+                RegKind.BOOLEAN -> JdwpValue.Int32(
+                    when (text.lowercase()) {
+                        "true", "1" -> 1; "false", "0" -> 0
+                        else -> error("boolean 只能写 true/false（或 1/0）")
+                    }
+                )
+                RegKind.CHAR -> JdwpValue.Int32(
+                    if (text.length == 1 && !text[0].isDigit()) text[0].code else int()
+                )
+                else -> JdwpValue.Int32(int())
+            }
+            Tag.LONG -> JdwpValue.Int64(text.toLongOrNull() ?: error("「$text」不是合法 long"))
+            Tag.FLOAT -> JdwpValue.Float32(text.toFloatOrNull() ?: error("「$text」不是合法 float"))
+            Tag.DOUBLE -> JdwpValue.Float64(text.toDoubleOrNull() ?: error("「$text」不是合法 double"))
+            Tag.OBJECT -> {
+                require(text == "null" || text == "0") {
+                    "引用型寄存器本期只支持写 null（把它清空）"
+                }
+                JdwpValue.Obj(Tag.OBJECT, 0)
+            }
+            else -> error("v 这种类型（${kind.cn}）暂不支持写入")
+        }
+    }
+
     /** 把 JDWP 值渲染成新手能看懂的字符串，返回 (显示文本, 对象 ID)。 */
     fun formatValue(v: JdwpValue, kind: RegKind): Pair<String, Long?> = when (v) {
         is JdwpValue.Int32 -> when (kind) {

@@ -281,6 +281,25 @@ object Tools {
         },
 
         Tool(
+            "write_register",
+            "改写当前停留位置某个寄存器的值（二期）。只能改类型推得出的寄存器，" +
+                "boolean 写 true/false，char 写单个字符，数值直接写，引用型只能写 null 清空。" +
+                "改错 tag 会破坏帧，所以类型未定的寄存器会被拒绝。改完返回该帧的最新寄存器。",
+            schema(
+                prop("reg", "integer", "寄存器号（vN 的 N；pN 在末尾，可先用 read_registers 看编号）"),
+                prop("value", "string", "要写入的值"),
+                prop("depth", "integer", "栈帧深度，默认 0（栈顶）"),
+                required = listOf("reg", "value"),
+            ),
+        ) { dbg, a ->
+            val reg = a["reg"]?.int ?: error("缺少 reg")
+            val f = dbg.writeRegister(a["depth"]?.int ?: 0, reg, a["value"]?.string ?: error("缺少 value"))
+            val r = f.registers.firstOrNull { it.reg == reg }
+            "已写入。${r?.let { "${it.name} = ${it.value}" } ?: ""}\n当前寄存器：\n" +
+                f.registers.joinToString("\n") { "  ${it.name.padEnd(4)} ${it.type.padEnd(8)} ${it.value}" }
+        },
+
+        Tool(
             "read_stack",
             "读取当前调用栈。带 [无模型] 的帧是 framework 方法，不在目标 APK 里。",
             schema(),

@@ -193,6 +193,34 @@ class FrameCmds(private val conn: JdwpConnection) {
         return (0 until n).map { r.readTaggedValue() }
     }
 
+    /**
+     * 写回若干寄存器（StackFrame.SetValues，cmdSet 16 cmd 2）。
+     *
+     * ⚠️ 与读同理，tag 必须与该 slot 实际持有的类型一致；写错 tag 不会报错，
+     * 只会悄悄破坏帧。所以调用方只应传由类型推导得出的 tag。
+     * 每项编码为：int slot、byte tag、随后是按 tag 定长的**未加标签**值。
+     */
+    fun setValues(threadId: Long, frameId: Long, updates: List<Triple<Int, Int, JdwpValue>>) {
+        if (updates.isEmpty()) return
+        val w = conn.writer().writeObjectId(threadId).writeFrameId(frameId).writeInt(updates.size)
+        updates.forEach { (slot, tag, value) ->
+            w.writeInt(slot).writeByte(tag)
+            when (value) {
+                is JdwpValue.Int32 -> w.writeInt(value.v)
+                is JdwpValue.Int64 -> w.writeLong(value.v)
+                is JdwpValue.Float32 -> w.writeInt(java.lang.Float.floatToRawIntBits(value.v))
+                is JdwpValue.Float64 -> w.writeLong(java.lang.Double.doubleToRawLongBits(value.v))
+                is JdwpValue.Obj -> w.writeObjectId(value.id)
+                is JdwpValue.Bool -> w.writeByte(if (value.v) 1 else 0)
+                is JdwpValue.Byte8 -> w.writeByte(value.v.toInt())
+                is JdwpValue.Char16 -> w.writeShort(value.v.code)
+                is JdwpValue.Short16 -> w.writeShort(value.v.toInt())
+                JdwpValue.Void -> error("不能写 void")
+            }
+        }
+        conn.send(CmdSet.STACK_FRAME, 2, w.toByteArray())   // 回包为空，出错会抛 JdwpException
+    }
+
     fun thisObject(threadId: Long, frameId: Long): JdwpValue {
         val data = conn.writer().writeObjectId(threadId).writeFrameId(frameId).toByteArray()
         return conn.send(CmdSet.STACK_FRAME, 3, data).readTaggedValue()

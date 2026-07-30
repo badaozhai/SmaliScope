@@ -70,6 +70,7 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         }
         server.createContext("/api/object") { ex -> handle(ex) { json(ex, expand(query(ex))) } }
         server.createContext("/api/frame") { ex -> handle(ex) { json(ex, frame(query(ex))) } }
+        server.createContext("/api/setreg") { ex -> handle(ex) { json(ex, setReg(query(ex))) } }
         server.createContext("/api/java") { ex -> handle(ex) { json(ex, javaSource(query(ex))) } }
         server.createContext("/api/timeline") { ex ->
             handle(ex) { json(ex, Json.arr(dbg.timeline().map { Json.of(it) })) }
@@ -191,6 +192,15 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
 
     private fun frame(q: Map<String, String>): String =
         dbg.readFrame(q["depth"]?.toIntOrNull() ?: 0)?.let { Json.of(it) } ?: "null"
+
+    private fun setReg(q: Map<String, String>): String {
+        val f = dbg.writeRegister(
+            q["depth"]?.toIntOrNull() ?: 0,
+            q["reg"]?.toIntOrNull() ?: error("缺少 reg"),
+            q["value"] ?: error("缺少 value"),
+        )
+        return Json.obj("ok" to Json.bool(true), "frame" to Json.of(f))
+    }
 
     /**
      * AI 讲解。慢（要往外发一次请求），所以只在用户点按钮时才会走到这里，

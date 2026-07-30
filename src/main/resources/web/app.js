@@ -400,6 +400,14 @@ function renderRegisters() {
     top.appendChild(el('span', 'name', r.name));
     top.appendChild(el('span', 'type', r.type));
     if (r.hint) top.appendChild(el('span', 'hint', r.hint));
+    // 二期：可读的原始类型寄存器可以就地改值（挂起、非回放时才显示）。
+    // 对象寄存器不给编辑入口——写任意对象需要有效 objectId，本期不做。
+    if (!S.replaying && r.readable && !r.expandable) {
+      const edit = el('span', 'reg-edit', '改');
+      edit.title = `把 ${r.name} 改成别的值，改完单步就能看到影响`;
+      clickable(edit, `修改寄存器 ${r.name}`, () => editRegister(r));
+      top.appendChild(edit);
+    }
     row.appendChild(top);
 
     const val = el('div', 'val' + (r.expandable ? ' clickable' : ''), r.value);
@@ -691,6 +699,27 @@ function applyState(st) {
 }
 
 const timelineVisible = () => $('#panel-timeline').classList.contains('active');
+
+// ── 改寄存器（二期）──────────────────────────────────────────────────────
+async function editRegister(r) {
+  const nv = prompt(`把 ${r.name}（${r.type}）改成：`, r.value);
+  if (nv === null || nv.trim() === '') return;
+  try {
+    const res = await api('/api/setreg', { reg: r.reg, value: nv.trim() });
+    // 用返回的最新帧更新面板，并让改动的寄存器高亮。
+    if (res && res.frame && S.state && S.state.frames.length) {
+      S.prevValues = {};
+      for (const x of S.state.frames[0].registers) S.prevValues[x.reg] = x.value;
+      const f = res.frame;
+      f.registers.forEach(x => { x.changed = S.prevValues[x.reg] !== undefined && S.prevValues[x.reg] !== x.value; });
+      S.state.frames[0] = f;
+      renderRegisters();
+      renderCode();
+    }
+  } catch (e) {
+    hint('改寄存器失败：' + e.message, 'error');
+  }
+}
 
 // ── 悬浮解释 ─────────────────────────────────────────────────────────────
 function showTip(e, text) {

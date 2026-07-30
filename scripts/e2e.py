@@ -89,6 +89,20 @@ check("单步逐条推进", len(seen_pcs) >= 6, " → ".join(map(str, seen_pcs))
 check("检测到寄存器变化", changed_any)
 check("走到了循环回边", len(set(seen_pcs)) < len(seen_pcs), "说明沿 goto 绕回了循环头")
 
+print("4b) 写寄存器（二期，仍处挂起态，不 resume）")
+fr = call("GET", "/api/frame", depth=0)
+target = next((r for r in (fr.get("registers") if fr else [])
+               if r["readable"] and not r["expandable"] and r["type"] == "int"), None)
+if target:
+    r = call("POST", "/api/setreg", reg=target["reg"], value="123")
+    newv = next((x for x in r["frame"]["registers"] if x["reg"] == target["reg"]), None)
+    check("寄存器写入生效", bool(newv) and newv["value"] == "123",
+          f"{target['name']}: {target['value']} → {newv['value'] if newv else '?'}")
+    # 改回去，避免影响后续断言
+    call("POST", "/api/setreg", reg=target["reg"], value=target["value"])
+else:
+    print("     · 当前帧没有可写的 int 局部寄存器，跳过")
+
 print("5) 执行时间线")
 tl = call("GET", "/api/timeline")
 check("时间线记录了快照", len(tl) >= 6, f"{len(tl)} 个快照")

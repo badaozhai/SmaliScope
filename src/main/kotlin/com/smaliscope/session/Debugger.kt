@@ -336,6 +336,12 @@ class Debugger(
 
     fun readFrame(depth: Int): FrameView? = session?.readFrame(depth)
 
+    /** 写寄存器（二期）。返回改动后的栈顶帧。 */
+    fun writeRegister(depth: Int, reg: Int, text: String): FrameView {
+        val sess = session ?: error("尚未开始调试")
+        return sess.writeRegister(depth, reg, text)
+    }
+
     fun timeline(): List<StepSnapshot> = session?.timeline?.toList() ?: emptyList()
 
     override fun close() {

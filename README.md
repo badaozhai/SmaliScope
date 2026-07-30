@@ -116,7 +116,8 @@ adb devices
 2. 左栏选类 → 选方法，中间会显示带 `dex_pc` 的 smali；
 3. 在某条指令左侧点圆点下断点（不知道断哪？底部「断点」页有「一键断在所有 Activity 的 onCreate」等模板）；
 4. 点「开始调试」——工具会挂起启动应用并自动 attach；
-5. 命中后用「步入 / 步过 / 步出」单步，右侧寄存器面板里**变化的寄存器会高亮**。
+5. 命中后用「步入 / 步过 / 步出」单步，右侧寄存器面板里**变化的寄存器会高亮**；
+   可读的寄存器旁有「改」按钮，能就地改值，再单步就看到它如何影响后续执行。
 
 ## 命令行
 
@@ -158,9 +159,9 @@ SmaliScope 实现了标准 **MCP**（Model Context Protocol），可以让 agent
 它会把 `[mcp_servers.smaliscope]` 写进 `~/.grok/config.toml`（grok-build），
 并打印 Claude Code / Cursor 的注册命令。也可以手动跑 `smaliscope mcp`，它走 JSON-RPC over stdio。
 
-暴露 17 个工具：`list_apps` `load_app` `list_classes` `list_methods` `disassemble`
+暴露 18 个工具：`list_apps` `load_app` `list_classes` `list_methods` `disassemble`
 `decompile_java` `set_breakpoint` `list_breakpoints` `remove_breakpoint` `start_debug`
-`step` `resume` `read_registers` `read_stack` `expand_object` `set_breakpoint_template` `stop_debug`。
+`step` `resume` `read_registers` `write_register` `read_stack` `expand_object` `set_breakpoint_template` `stop_debug`。
 
 `start_debug` 返回给模型的原文长这样——位置、指令、指令含义、数据流、寄存器实际值一次给全：
 

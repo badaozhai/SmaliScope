@@ -452,6 +452,27 @@ class DebugSession(
         if (!::frameReader.isInitialized) null
         else runCatching { frameReader.expandObject(objectId) }.getOrNull()
 
+    /**
+     * 写寄存器（二期）。只有停下来时才允许，写完重读栈顶帧让改动落到各视图。
+     * 返回改动后的栈顶帧。
+     */
+    fun writeRegister(depth: Int, reg: Int, text: String): FrameView = lock.withLock {
+        val t = suspendedThread ?: error("只有在断点停下时才能改寄存器")
+        val stack = threads.frames(t)
+        val f = stack.getOrNull(depth) ?: error("取不到第 $depth 层帧")
+        val model = runtime.modelOf(f.location.classId, f.location.methodId)
+        frameReader.writeRegister(t, f.frameId, model, f.location.dexPc, reg, text)
+        // 重读栈顶帧（改的往往就是栈顶），让寄存器面板、数据流、时间线都看到新值。
+        val top = stack.first()
+        val topModel = runtime.modelOf(top.location.classId, top.location.methodId)
+        val (fqcn, name, sig) = runtime.describeLocation(top.location)
+        FrameView(
+            frameId = top.frameId, depth = 0, fqcn = fqcn, method = name, signature = sig,
+            dexPc = top.location.dexPc, hasModel = topModel != null,
+            registers = frameReader.readRegisters(t, top.frameId, topModel, top.location.dexPc),
+        )
+    }
+
     /** 点开非栈顶帧时按需读它的寄存器。 */
     fun readFrame(depth: Int): FrameView? = lock.withLock {
         val t = suspendedThread ?: return@withLock null
