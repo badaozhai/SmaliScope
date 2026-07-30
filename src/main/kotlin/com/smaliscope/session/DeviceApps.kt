@@ -78,8 +78,8 @@ class DeviceApps(private val adb: AdbClient, private val serial: String) {
         var hasZygisk = false
         if (hasSu) {
             val probe = runCatching {
-                adb.shell(serial, "su -c 'ls -d /data/adb/magisk /data/adb/ksu /data/adb/ap " +
-                    "/data/adb/modules/zygisksu /data/adb/modules/rezygisk 2>/dev/null'")
+                adb.suShell(serial, "ls -d /data/adb/magisk /data/adb/ksu /data/adb/ap " +
+                    "/data/adb/modules/zygisksu /data/adb/modules/rezygisk 2>/dev/null")
             }.getOrDefault("")
             rootKind = when {
                 probe.contains("/data/adb/magisk") -> "Magisk"
@@ -115,8 +115,8 @@ data class EnvProbe(
      * 所以这里不再按系统属性宣称「所有应用都能调」——真正可靠的判断是
      * 「该应用的进程在不在 adb jdwp 列表里」，那是 [DeviceApps.isDebuggable] 在做的事。
      *
-     * 让未改造的第三方应用可调，选定的方案是 root 下用 Zygisk 模块在 fork 时
-     * 给目标进程置 DEBUG_ENABLE_JDWP，原包一字不动（见 ROADMAP 第 2 项）。
+     * 让未改造的第三方应用可调，走的是 root 下的 Zygisk 模块（源码在 `zygisk/`）：
+     * 在 fork 时给名单里的进程置 DEBUG_ENABLE_JDWP | DEBUG_JAVA_DEBUGGABLE，原包一字不动。
      * 明确不采用重打包重签名：改签名会让应用自带的签名校验失效、必须卸载重装丢数据，
      * 而且修改的是被研究对象本身。
      */
@@ -136,11 +136,12 @@ data class EnvProbe(
         }
         append(
             when {
-                hasZygisk -> "本机有 $rootKind 且 Zygisk 可用，" +
-                    "装上配套模块后即可给指定应用打上可调试标记（模块尚未实现），原包一字不动。"
+                hasZygisk -> "本机有 $rootKind 且 Zygisk 可用。装上配套模块后，" +
+                    "用 smaliscope zygisk add <包名> 即可让指定应用可调，原包一字不动。" +
+                    "当前状态用 smaliscope zygisk status 查看。"
                 hasSu -> "本机有 $rootKind 但未发现 Zygisk（Magisk 自带；KernelSU / APatch 需装 ZygiskNext）。" +
                     "逐应用打可调试标记要靠它。"
-                else -> "要调试未改造的第三方应用需要 root + Zygisk（模块尚未实现）。"
+                else -> "要调试未改造的第三方应用需要 root + Zygisk。"
             }
         )
     }

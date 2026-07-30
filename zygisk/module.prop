@@ -1,0 +1,6 @@
+id=smaliscope_debuggable
+name=SmaliScope Debuggable
+version=v0.1.0
+versionCode=1
+author=SmaliScope
+description=只给名单里的应用打上可调试标记（JDWP + java-debuggable），原 APK 一字不动。名单在 /data/adb/smaliscope/targets，用 smaliscope zygisk add <包名> 维护。

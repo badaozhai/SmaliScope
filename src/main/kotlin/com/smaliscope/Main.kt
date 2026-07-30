@@ -18,6 +18,8 @@ SmaliScope —— 面向新手的 DEX/smali 指令级断点调试器
   mcp                            以 MCP server 运行（JSON-RPC over stdio），供 AI agent 驱动调试
   mcp-install                    把自己注册进本机 MCP 客户端（grok / Claude Code）的配置
   config [键 [值]] [--test]       查看 / 修改配置（大模型接口地址与 key 等）
+  zygisk <status|install|add|remove|list> [参数]
+                                 管理 Zygisk 模块，让未改造的第三方应用可调（需 root）
 """
 
 /** APK 本地缓存目录。 */
@@ -39,6 +41,7 @@ fun main(args: Array<String>) {
         first == "mcp" -> cmdMcp()
         first == "mcp-install" -> cmdMcpInstall()
         first == "config" -> cmdConfig(argv.drop(1))
+        first == "zygisk" -> cmdZygisk(argv.drop(1))
         first == "-h" || first == "--help" -> println(USAGE.trim())
         else -> {
             System.err.println("未知命令: $first")
@@ -413,6 +416,60 @@ private fun cmdConfig(args: List<String>) {
     println("  smaliscope config --test                            # 测试连通性")
     println()
     println("让 AI agent 驱动调试器（与上面的接口配置无关）：smaliscope mcp-install")
+}
+
+/**
+ * 管理 Zygisk 模块：让未改造的第三方 release 包也能被调试（需 root）。
+ * 为什么必须走这条路见 docs/p0-path-findings.md。
+ */
+private fun cmdZygisk(args: List<String>) {
+    val adb = AdbClient()
+    val device = adb.pickDevice()
+    val z = com.smaliscope.session.ZygiskModule(adb, device.serial)
+    val sub = args.firstOrNull() ?: "status"
+
+    when (sub) {
+        "status" -> {
+            val s = z.status()
+            println("设备: ${device.serial}")
+            println("  root      : ${if (s.hasSu) s.rootKind else "无"}")
+            println("  Zygisk    : ${if (s.hasZygisk) "可用" else "不可用"}")
+            println("  模块      : ${if (!s.installed) "未安装" else if (s.enabled) "已安装 ${s.version ?: ""}" else "已安装但被禁用"}")
+            println("  目标名单  : ${s.targets.ifEmpty { listOf("（空）") }.joinToString("、")}")
+            println()
+            println("→ ${s.advice}")
+        }
+        "install" -> {
+            val zip = args.getOrNull(1)?.let { java.io.File(it) }
+                ?: java.io.File("zygisk/build/smaliscope-zygisk.zip")
+            println("正在安装 ${zip.path} …")
+            println(z.install(zip))
+            println()
+            println("装完需要重启一次设备，Zygisk 才会加载模块。之后：")
+            println("  smaliscope zygisk add <包名>")
+        }
+        "add" -> {
+            val pkg = args.getOrNull(1) ?: run {
+                System.err.println("用法: zygisk add <包名>"); kotlin.system.exitProcess(2)
+            }
+            if (z.addTarget(pkg)) println("已把 $pkg 加入名单。") else println("$pkg 本来就在名单里。")
+            println("强杀并重新打开该应用即可生效：adb shell am force-stop $pkg")
+        }
+        "remove" -> {
+            val pkg = args.getOrNull(1) ?: run {
+                System.err.println("用法: zygisk remove <包名>"); kotlin.system.exitProcess(2)
+            }
+            if (z.removeTarget(pkg)) println("已从名单移除 $pkg。") else println("$pkg 不在名单里。")
+        }
+        "list" -> {
+            val t = z.readTargets()
+            println(if (t.isEmpty()) "名单为空。" else t.joinToString("\n"))
+        }
+        else -> {
+            System.err.println("未知子命令 $sub，可用: status / install / add / remove / list")
+            kotlin.system.exitProcess(2)
+        }
+    }
 }
 
 /** 本可执行文件的绝对路径，写进 MCP 客户端配置用。 */

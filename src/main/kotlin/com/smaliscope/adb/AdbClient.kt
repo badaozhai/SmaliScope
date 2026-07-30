@@ -226,6 +226,78 @@ class AdbClient(
         }
     }
 
+    // su 的调用形式按设备而异，探测结果按设备缓存（每次都探会让每条命令都多一次往返）。
+    private val suForm = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * 以 root 执行一条命令。
+     *
+     * `su` 的语法不统一，必须探测而不能假定：
+     *  - Magisk / KernelSU / APatch 的 su 接受 `su -c '<cmd>'`；
+     *  - AOSP（userdebug 镜像自带）的 su 是 `su [用户] [命令]`，喂 `-c` 会报
+     *    "invalid uid/gid '-c'"。
+     * `su root sh -c '<cmd>'` 两边都认，所以作为兜底形式。
+     *
+     * @return 命令输出；没有 root 或都失败时返回空串（调用方按「探测不到」处理即可）。
+     */
+    fun suShell(serial: String, cmd: String): String {
+        val quoted = cmd.replace("'", "'\\''")
+        val form = suForm.getOrPut(serial) {
+            when {
+                shell(serial, "su -c 'id -u'").trim() == "0" -> "-c"
+                shell(serial, "su root sh -c 'id -u'").trim() == "0" -> "root"
+                else -> "none"
+            }
+        }
+        return when (form) {
+            "-c" -> shell(serial, "su -c '$quoted'")
+            "root" -> shell(serial, "su root sh -c '$quoted'")
+            else -> ""
+        }
+    }
+
+    /** 用 sync 协议把本地文件推到设备。mode 是目标文件权限（八进制，如 0o755）。 */
+    fun push(serial: String, localFile: java.io.File, remotePath: String, mode: Int = "755".toInt(8)) {
+        require(localFile.isFile) { "找不到本地文件 ${localFile.absolutePath}" }
+        open(30_000).use { sock ->
+            sock.soTimeout = 120_000
+            transport(sock, serial)
+            request(sock.getOutputStream(), "sync:")
+            expectOkay(sock.getInputStream(), "sync")
+
+            val out = sock.getOutputStream()
+            val input = sock.getInputStream()
+            // SEND 的参数是 "<路径>,<权限>"
+            val spec = "$remotePath,$mode".toByteArray(Charsets.UTF_8)
+            out.write("SEND".toByteArray(Charsets.US_ASCII))
+            out.write(le32(spec.size))
+            out.write(spec)
+
+            localFile.inputStream().buffered().use { fin ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = fin.read(buf)
+                    if (n <= 0) break
+                    out.write("DATA".toByteArray(Charsets.US_ASCII))
+                    out.write(le32(n))
+                    out.write(buf, 0, n)
+                }
+            }
+            out.write("DONE".toByteArray(Charsets.US_ASCII))
+            out.write(le32((localFile.lastModified() / 1000).toInt())) // mtime
+            out.flush()
+
+            when (val id = String(readExactly(input, 4), Charsets.US_ASCII)) {
+                "OKAY" -> readExactly(input, 4)
+                "FAIL" -> {
+                    val n = readLe32(readExactly(input, 4))
+                    throw IOException("推送 $remotePath 失败: ${String(readExactly(input, n))}")
+                }
+                else -> throw IOException("sync 协议异常: $id")
+            }
+        }
+    }
+
     private fun le32(v: Int) = byteArrayOf(
         v.toByte(), (v ushr 8).toByte(), (v ushr 16).toByte(), (v ushr 24).toByte()
     )

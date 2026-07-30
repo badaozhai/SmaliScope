@@ -82,8 +82,8 @@ adb devices
 > 即便 `ro.debuggable=1` 且 `ro.force.debuggable=1`，未改造的 release 包依然不出现在
 > `adb jdwp` 里，连 `am set-debug-app -w` 也无效。完整实验见
 > [docs/p0-path-findings.md](docs/p0-path-findings.md)。
-> 要调别人的 App **没有免改造的捷径**：选定的方案是 root 下用 Zygisk 模块在进程启动时
-> 逐应用打标记，原包一字不动（尚未实现）。
+> 要调别人的 App **没有免改造的捷径**。本项目的做法是 root 下用 Zygisk 模块在进程启动时
+> 逐应用打标记，原包一字不动——见下方「调试未改造的第三方应用」。
 
 ### 2. 构建并安装自带的测试应用
 
@@ -121,6 +121,7 @@ smaliscope audit <包名> <类名> [方法名]             # 统计寄存器可�
 smaliscope mcp                                    # 以 MCP server 运行（stdio）
 smaliscope mcp-install                            # 注册进本机 MCP 客户端
 smaliscope config [键 [值]] [--test]               # 查看 / 修改配置
+smaliscope zygisk <status|install|add|remove|list> # 管理 Zygisk 模块（需 root）
 ```
 
 例如：
@@ -197,6 +198,30 @@ smaliscope config --test                          # 测连通性
 > ⚠️ 调用会把 smali、反编译出的 Java 和运行时寄存器值发送到你配置的地址。
 > 你调试的往往是**别人的** APK，请确认该地址可信后再启用。
 
+## 调试未改造的第三方应用（需 root + Zygisk）
+
+自带 `android:debuggable="true"` 的应用（也就是你自己开发的 debug 包）零配置即可调试。
+要调**别人的 release 包**，需要在进程启动时给它打上可调试标记——`zygisk/` 里的配套模块干这件事，
+**原 APK 一字不动**，签名、数据、更新链路全部保留。
+
+```bash
+./zygisk/build.sh                                            # 编译并打包（需 NDK）
+smaliscope zygisk status                                     # 查 root / Zygisk / 模块状态
+smaliscope zygisk install zygisk/build/smaliscope-zygisk.zip  # 装模块（装完重启一次）
+smaliscope zygisk add com.example.app                        # 加入名单
+adb shell am force-stop com.example.app                      # 强杀后重开即生效
+```
+
+模块只做一件事：在 zygote fork 时，给名单里的进程置上
+`DEBUG_ENABLE_JDWP | DEBUG_JAVA_DEBUGGABLE`。名单在 `/data/adb/smaliscope/targets`，
+只有 root 能写（否则任何应用都能给自己开调试）。改完名单不必重启手机，强杀目标应用即可。
+
+前置条件：Magisk（自带 Zygisk），或 KernelSU / APatch 加装 ZygiskNext。
+`zygisk status` 会把缺哪一环说清楚。
+
+> 为什么必须这么做、而不是改 `ro.debuggable` 或重打包重签名，
+> 见 [docs/p0-path-findings.md](docs/p0-path-findings.md)。
+
 ## 测试
 
 ```bash
@@ -233,6 +258,7 @@ python3 scripts/mcp-e2e.py
 | M8 | 执行指针、寄存器高亮、数据流、CFG 走过路径、调用栈、对象图、时间线 | ✅ |
 | M9 | 中文错误引导 ✅ / jpackage 三平台打包 ❌ | 部分 |
 | — | 标准 MCP server（16 个工具，供 AI agent 驱动调试） | ✅ |
+| — | Zygisk 模块：给名单里的应用打可调试标记，原 APK 不动 | ✅ |
 
 ## 已知限制：寄存器可读率
 
@@ -254,12 +280,10 @@ ART 校验「读寄存器该用哪个 tag」时，依据的是 dex 调试信息�
 
 ## 尚未实现
 
-- **让未改造的第三方应用变得可调试**。这是目前最大的缺口，且已实测清楚该走哪条路
-  （[docs/p0-path-findings.md](docs/p0-path-findings.md)）：设计方案原本主推的 P0（靠系统属性）
-  和 P1（root + `resetprop ro.debuggable`）在现代 Android 上都已失效，
-  选定的方案是 root 下用 **Zygisk 模块在进程 fork 时逐应用打 `FLAG_DEBUGGABLE`**——
-  原包一字不动，签名与数据都保留。**不走重打包重签名**：改签名会让应用自带的签名校验失效、
-  必须卸载重装导致数据丢失，而且修改的是被研究对象本身。代价是这条路需要 root。
+- **Zygisk 模块尚未在真机上端到端验证**：模块已写好并编译通过（`zygisk/`），
+  工具侧的状态探测与名单管理也已可用，但「装上模块 → 对一个未改造的 release 包
+  下断点命中」这一步还没实测过。装 Zygisk 模块有让设备无法启动的风险，
+  需要使用者自行决定是否在自己的设备上验证。
 - 寄存器写入、条件断点、表达式求值（设计方案里本就列为二期）。
 - jpackage 打包与 platform-tools 自动下载。
 
@@ -291,6 +315,7 @@ src/main/kotlin/com/smaliscope/
   explain/      可选的大模型讲解：OpenAI 兼容客户端 + 提示词构造
 src/main/resources/web/    前端（无框架，原生 JS/CSS/SVG）
 testapp/                   自带的 debuggable 测试应用（aapt2 + javac + d8 手工构建）
+zygisk/                    Zygisk 模块（C++）：给名单里的应用打可调试标记
 scripts/e2e.py             Web 侧端到端回归（需设备）
 scripts/mcp-e2e.py         MCP 侧端到端回归（需设备）
 scripts/shots.py           重新生成 README 里的界面截图（Chrome headless + CDP）
