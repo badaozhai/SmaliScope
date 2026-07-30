@@ -87,7 +87,31 @@ data class BreakpointView(
     val state: String,
     val hitCount: Int,
     val note: String? = null,
+    /** 条件断点的人类可读描述；null 表示无条件（每次命中都停）。 */
+    val condition: String? = null,
 )
+
+/**
+ * 断点条件（二期）。刻意不做完整表达式引擎，只做两种覆盖大多数场景、
+ * 又能在命中回调里廉价判定的形式：跳过前若干次命中、以及某个寄存器等于某值。
+ * 两者可叠加（先数够次数，再看寄存器）。
+ */
+data class BpCondition(
+    /** 跳过前 skip 次命中（第 skip+1 次起才可能停）。0 表示不跳过。 */
+    val skip: Int = 0,
+    /** 寄存器号；非 null 时，仅当该寄存器的显示值等于 [equals] 才停。 */
+    val reg: Int? = null,
+    val equals: String? = null,
+) {
+    val isEmpty: Boolean get() = skip <= 0 && reg == null
+    fun describe(regName: (Int) -> String = { "v$it" }): String = buildString {
+        if (skip > 0) append("跳过前 $skip 次")
+        if (reg != null && equals != null) {
+            if (isNotEmpty()) append("，")
+            append("${regName(reg)} = $equals")
+        }
+    }.ifEmpty { "无条件" }
+}
 
 data class StepSnapshot(
     val seq: Int,

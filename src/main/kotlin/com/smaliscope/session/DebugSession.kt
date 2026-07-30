@@ -78,7 +78,10 @@ class DebugSession(
      * 那时还没有 JDWP 连接，必须先记下来，attach 时在放行应用之前装上——
      * 否则应用早就跑过断点位置了。
      */
-    private data class BpSpec(val id: Int, val fqcn: String, val method: String, val signature: String, val dexPc: Int)
+    private data class BpSpec(
+        val id: Int, val fqcn: String, val method: String, val signature: String, val dexPc: Int,
+        var condition: BpCondition? = null,
+    )
 
     private val preSpecs = LinkedHashMap<Int, BpSpec>()
 
@@ -162,7 +165,7 @@ class DebugSession(
         runCatching {
             vm.suspend()
             preSpecs.values.forEach { s ->
-                val bp = breakpoints.add(s.id, s.fqcn, s.method, s.signature, s.dexPc)
+                val bp = breakpoints.add(s.id, s.fqcn, s.method, s.signature, s.dexPc, s.condition)
                 if (bp.state == BreakpointEngine.State.ACTIVE) anyBreakpointActive = true
             }
             preSpecs.clear()
@@ -258,13 +261,19 @@ class DebugSession(
                             stayaSuspended = true
                         }
                     } else {
-                        breakpoints.byRequest(ev.requestId)?.let { it.hitCount++ }
-                        if (currentPlan != null) {
-                            stepEngine.finish()
-                            currentPlan = null
+                        val bp = breakpoints.byRequest(ev.requestId)
+                        bp?.let { it.hitCount++ }
+                        if (bp != null && !conditionMet(bp, ev.threadId)) {
+                            // 条件不满足：静默放行，就像没设这个断点一样。
+                            threadToResume = ev.threadId
+                        } else {
+                            if (currentPlan != null) {
+                                stepEngine.finish()
+                                currentPlan = null
+                            }
+                            onSuspended(ev.threadId, "断点命中")
+                            stayaSuspended = true
                         }
-                        onSuspended(ev.threadId, "断点命中")
-                        stayaSuspended = true
                     }
                 }
 
@@ -287,6 +296,26 @@ class DebugSession(
                 else -> Unit
             }
         }
+    }
+
+    /**
+     * 判定条件断点是否该停。已在 handleEvents 的锁内调用，可以直接读帧。
+     * 判不出来（读不到寄存器等）时按「停」处理——宁可多停一次，也不要悄悄跑过用户想看的点。
+     */
+    private fun conditionMet(bp: BreakpointEngine.Bp, threadId: Long): Boolean {
+        val c = bp.condition ?: return true
+        if (bp.hitCount <= c.skip) return false
+        if (c.reg != null && c.equals != null) {
+            val top = runCatching { threads.frames(threadId).firstOrNull() }.getOrNull() ?: return true
+            val model = runtime.modelOf(top.location.classId, top.location.methodId)
+            val regs = runCatching {
+                frameReader.readRegisters(threadId, top.frameId, model, top.location.dexPc)
+            }.getOrNull() ?: return true
+            val rv = regs.firstOrNull { it.reg == c.reg } ?: return true
+            if (!rv.readable) return true   // 读不出来就别拿它当条件把用户挡在外面
+            return rv.value.trim() == c.equals.trim()
+        }
+        return true
     }
 
     /** 命中后在一次往返内取齐位置、栈、寄存器，保证前端各视图同一帧内一致。 */
@@ -366,20 +395,26 @@ class DebugSession(
         runCatching { threads.resume(t) }
     }
 
-    fun addBreakpoint(fqcn: String, method: String, signature: String, dexPc: Int): BreakpointView {
+    fun addBreakpoint(
+        fqcn: String, method: String, signature: String, dexPc: Int,
+        condition: BpCondition? = null,
+    ): BreakpointView {
         lock.withLock {
             if (!::breakpoints.isInitialized) {
                 preSpecs.values.firstOrNull {
                     it.fqcn == fqcn && it.method == method && it.signature == signature && it.dexPc == dexPc
                 }?.let {
-                    return BreakpointView(it.id, fqcn, method, signature, dexPc, "pending", 0, "等待连接建立")
+                    if (condition != null) it.condition = condition.takeUnless { c -> c.isEmpty }
+                    return BreakpointView(it.id, fqcn, method, signature, dexPc, "pending", 0,
+                        "等待连接建立", it.condition?.describe())
                 }
                 val id = bpIdGen.getAndIncrement()
-                preSpecs[id] = BpSpec(id, fqcn, method, signature, dexPc)
+                preSpecs[id] = BpSpec(id, fqcn, method, signature, dexPc, condition?.takeUnless { it.isEmpty })
                 log("断点已设置：${fqcn.substringAfterLast('.')}.$method（将在连接建立时生效）")
-                return BreakpointView(id, fqcn, method, signature, dexPc, "pending", 0, "等待连接建立")
+                return BreakpointView(id, fqcn, method, signature, dexPc, "pending", 0,
+                    "等待连接建立", condition?.takeUnless { it.isEmpty }?.describe())
             }
-            val bp = breakpoints.add(bpIdGen.getAndIncrement(), fqcn, method, signature, dexPc)
+            val bp = breakpoints.add(bpIdGen.getAndIncrement(), fqcn, method, signature, dexPc, condition)
             if (bp.state == BreakpointEngine.State.ACTIVE) anyBreakpointActive = true
             log(
                 if (bp.state == BreakpointEngine.State.PENDING)
@@ -395,10 +430,18 @@ class DebugSession(
         Unit
     }
 
+    /** 给已存在的断点设/清条件。断点可能还在 preSpecs（attach 前设的），两处都要照顾。 */
+    fun setBreakpointCondition(id: Int, condition: BpCondition?): Boolean = lock.withLock {
+        val c = condition?.takeUnless { it.isEmpty }
+        preSpecs[id]?.let { it.condition = c; return@withLock true }
+        if (::breakpoints.isInitialized) breakpoints.setCondition(id, c) else false
+    }
+
     fun listBreakpoints(): List<BreakpointView> = lock.withLock {
         val live = if (::breakpoints.isInitialized) breakpoints.list() else emptyList()
         val queued = preSpecs.values.map {
-            BreakpointView(it.id, it.fqcn, it.method, it.signature, it.dexPc, "pending", 0, "等待连接建立")
+            BreakpointView(it.id, it.fqcn, it.method, it.signature, it.dexPc, "pending", 0,
+                "等待连接建立", it.condition?.describe())
         }
         live + queued
     }

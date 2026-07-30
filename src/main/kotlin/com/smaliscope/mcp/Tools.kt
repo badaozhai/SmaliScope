@@ -135,20 +135,50 @@ object Tools {
         Tool(
             "set_breakpoint",
             "在某条 smali 指令上下断点。dexPc 必须是 disassemble 里出现过的偏移。" +
-                "类还没加载时会自动转为 pending，等类加载后生效，无需额外处理。",
+                "类还没加载时会自动转为 pending，等类加载后生效，无需额外处理。" +
+                "可选条件断点（二期）：skip 跳过前 N 次命中；whenReg + equals 只在某寄存器等于某值时才停。",
             schema(
                 prop("class", "string", "类名"),
                 prop("method", "string", "方法名"),
                 prop("signature", "string", "可选，JVM 方法签名"),
                 prop("dexPc", "integer", "指令偏移，取自 disassemble"),
+                prop("skip", "integer", "可选，跳过前 N 次命中（循环里定位第 N 圈很有用）"),
+                prop("whenReg", "integer", "可选，寄存器号；配合 equals，只在它等于 equals 时才停"),
+                prop("equals", "string", "可选，whenReg 要匹配的值（按面板显示的样子，如 5 / true）"),
                 required = listOf("class", "method", "dexPc"),
             ),
         ) { dbg, a ->
             val (fqcn, name, sig) = resolveMethod(dbg, a)
             val pc = a["dexPc"]?.int ?: error("缺少 dexPc")
-            val bp = dbg.addBreakpoint(fqcn, name, sig, pc)
+            val cond = com.smaliscope.session.BpCondition(
+                skip = a["skip"]?.int ?: 0,
+                reg = a["whenReg"]?.int,
+                equals = a["equals"]?.string,
+            ).takeUnless { it.isEmpty }
+            val bp = dbg.addBreakpoint(fqcn, name, sig, pc, cond)
             "断点 #${bp.id} 已设置：$fqcn.$name @ dex_pc $pc，状态 ${bp.state}" +
-                (bp.note?.let{"（$it）"} ?: "")
+                (bp.condition?.let { "，条件：$it" } ?: "") + (bp.note?.let { "（$it）" } ?: "")
+        },
+
+        Tool(
+            "set_breakpoint_condition",
+            "给一个已存在的断点设置或清除条件（二期）。三个条件参数都留空即清除条件、恢复为每次都停。",
+            schema(
+                prop("id", "integer", "断点编号"),
+                prop("skip", "integer", "跳过前 N 次命中"),
+                prop("whenReg", "integer", "寄存器号，配合 equals"),
+                prop("equals", "string", "whenReg 要匹配的值"),
+                required = listOf("id"),
+            ),
+        ) { dbg, a ->
+            val id = a["id"]?.int ?: error("缺少 id")
+            val cond = com.smaliscope.session.BpCondition(
+                skip = a["skip"]?.int ?: 0,
+                reg = a["whenReg"]?.int,
+                equals = a["equals"]?.string,
+            ).takeUnless { it.isEmpty }
+            if (!dbg.setBreakpointCondition(id, cond)) "没有编号为 $id 的断点"
+            else if (cond == null) "已清除断点 #$id 的条件" else "断点 #$id 的条件已设为：${cond.describe()}"
         },
 
         Tool(
@@ -183,6 +213,7 @@ object Tools {
             if (bps.isEmpty()) "尚未设置断点"
             else bps.joinToString("\n") {
                 "#${it.id} ${it.fqcn}.${it.method} @ ${it.dexPc}  ${it.state}  命中 ${it.hitCount} 次" +
+                    (it.condition?.let { c -> "  条件：$c" } ?: "") +
                     (it.note?.let { n -> "  （$n）" } ?: "")
             }
         },

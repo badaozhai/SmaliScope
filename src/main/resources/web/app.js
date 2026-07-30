@@ -619,17 +619,38 @@ function renderBreakpoints() {
   panel.appendChild(head);
   for (const b of S.bps) {
     const row = el('div', 'bprow');
-    row.appendChild(el('div', null, `${b.fqcn.split('.').pop()}.${b.method} @ ${b.dexPc}`));
+    const loc = el('div', null, `${b.fqcn.split('.').pop()}.${b.method} @ ${b.dexPc}`);
+    if (b.condition) loc.appendChild(el('span', 'bp-cond', ' 条件：' + b.condition));
+    row.appendChild(loc);
     const st = el('div', 'st-' + b.state,
       b.state === 'pending' ? '等待类加载' : b.state === 'active' ? '已生效' : '错误');
     if (b.note) st.title = b.note;
     row.appendChild(st);
     row.appendChild(el('div', null, String(b.hitCount)));
+    const acts = el('div', 'bp-acts');
+    const cond = el('button', null, '条件');
+    cond.title = '让它只在特定情况下停：跳过前 N 次命中，或某寄存器等于某值';
+    cond.onclick = () => editCondition(b);
+    acts.appendChild(cond);
     const del = el('button', null, '删除');
     del.onclick = async () => { await api('/api/bp/remove', { id: b.id }); };
-    row.appendChild(del);
+    acts.appendChild(del);
+    row.appendChild(acts);
     panel.appendChild(row);
   }
+}
+
+async function editCondition(b) {
+  const skip = prompt(`断点 #${b.id}：跳过前几次命中？（0 = 不跳过，循环里定位第 N 圈很有用）`,
+    '0');
+  if (skip === null) return;
+  const rspec = prompt('再加「某寄存器等于某值才停」？填 寄存器号=值（如 1=5，即 v1 等于 5）；留空表示不加。', '');
+  let reg = '', eq = '';
+  if (rspec && rspec.includes('=')) { const [a, v] = rspec.split('='); reg = a.trim(); eq = v.trim(); }
+  try {
+    await api('/api/bp/cond', { id: b.id, skip: skip.trim() || '0', reg, eq });
+    await refreshBps();
+  } catch (e) { hint('设置条件失败：' + e.message, 'error'); }
 }
 
 // ── 断点与控制 ────────────────────────────────────────────────────────────

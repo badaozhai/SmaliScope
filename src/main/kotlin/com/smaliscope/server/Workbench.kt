@@ -61,6 +61,7 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         server.createContext("/api/method") { ex -> handle(ex) { json(ex, methodView(query(ex))) } }
         server.createContext("/api/bp") { ex -> handle(ex) { json(ex, addBp(query(ex))) } }
         server.createContext("/api/bp/remove") { ex -> handle(ex) { json(ex, removeBp(query(ex))) } }
+        server.createContext("/api/bp/cond") { ex -> handle(ex) { json(ex, setCond(query(ex))) } }
         server.createContext("/api/breakpoints") { ex -> handle(ex) { json(ex, breakpoints()) } }
         server.createContext("/api/templates") { ex -> handle(ex) { json(ex, templates()) } }
         server.createContext("/api/template") { ex -> handle(ex) { json(ex, applyTemplate(query(ex))) } }
@@ -166,6 +167,19 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         dbg.removeBreakpoint(q["id"]?.toIntOrNull() ?: error("缺少 id"))
         sse.send("breakpoints", breakpoints())
         return ok()
+    }
+
+    private fun setCond(q: Map<String, String>): String {
+        val id = q["id"]?.toIntOrNull() ?: error("缺少 id")
+        // 空的三个参数 = 清除条件
+        val cond = com.smaliscope.session.BpCondition(
+            skip = q["skip"]?.toIntOrNull() ?: 0,
+            reg = q["reg"]?.toIntOrNull(),
+            equals = q["eq"]?.takeIf { it.isNotEmpty() },
+        )
+        val okSet = dbg.setBreakpointCondition(id, cond.takeUnless { it.isEmpty })
+        sse.send("breakpoints", breakpoints())
+        return Json.obj("ok" to Json.bool(okSet))
     }
 
     private fun breakpoints(): String = Json.arr(dbg.breakpoints().map { Json.of(it) })

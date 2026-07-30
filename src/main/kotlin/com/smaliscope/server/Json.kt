@@ -108,6 +108,7 @@ object Json {
         "state" to str(b.state),
         "hitCount" to num(b.hitCount),
         "note" to str(b.note),
+        "condition" to str(b.condition),
     )
 
     fun of(s: StepSnapshot): String = obj(

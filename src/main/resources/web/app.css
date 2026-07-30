@@ -218,7 +218,10 @@ main { flex: 1; display: flex; min-height: 0; overflow-x: auto; }
 .tpl-label { font-size: 12px; color: var(--fg-dim); }
 .tpl-btn { font-size: 12px; padding: 4px 10px; background: #23384f; border-color: #2e4a68; color: #cfe6ff; }
 
-.bprow { display: grid; grid-template-columns: 1fr 90px 70px 60px; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1f242c; font-size: 13px; }
+.bprow { display: grid; grid-template-columns: 1fr 82px 60px 118px; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1f242c; font-size: 13px; align-items: center; }
+.bp-cond { color: var(--cur); font-size: 11px; }
+.bp-acts { display: flex; gap: 6px; }
+.bp-acts button { font-size: 12px; padding: 3px 8px; }
 .bprow .st-pending { color: var(--write); }
 .bprow .st-active { color: var(--ok); }
 .bprow .st-error { color: var(--hit); }

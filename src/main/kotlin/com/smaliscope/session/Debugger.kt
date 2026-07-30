@@ -211,9 +211,18 @@ class Debugger(
 
     // ── 断点与执行控制 ──────────────────────────────────────────────────────
 
-    fun addBreakpoint(fqcn: String, method: String, signature: String, dexPc: Int): BreakpointView {
+    fun addBreakpoint(
+        fqcn: String, method: String, signature: String, dexPc: Int,
+        condition: BpCondition? = null,
+    ): BreakpointView {
         val sess = session ?: error("请先载入要调试的应用")
-        return sess.addBreakpoint(fqcn, method, signature, dexPc)
+        return sess.addBreakpoint(fqcn, method, signature, dexPc, condition)
+    }
+
+    /** 给已存在的断点设/清条件（二期）。 */
+    fun setBreakpointCondition(id: Int, condition: BpCondition?): Boolean {
+        val sess = session ?: error("请先载入要调试的应用")
+        return sess.setBreakpointCondition(id, condition)
     }
 
     // ── 预设断点模板 ────────────────────────────────────────────────────────

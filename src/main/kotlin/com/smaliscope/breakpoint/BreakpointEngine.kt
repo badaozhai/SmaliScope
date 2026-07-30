@@ -32,6 +32,8 @@ class BreakpointEngine(
         var requestId: Int? = null
         var hitCount: Int = 0
         var note: String? = null
+        /** 条件断点：null 表示无条件。命中判定见 DebugSession.handleEvents。 */
+        var condition: com.smaliscope.session.BpCondition? = null
     }
 
     private val events = EventRequestCmds(conn)
@@ -50,15 +52,31 @@ class BreakpointEngine(
      * 用户先拿到的编号会在连接建立后失效。
      */
     @Synchronized
-    fun add(id: Int, fqcn: String, method: String, signature: String, dexPc: Int): Bp {
+    fun add(
+        id: Int, fqcn: String, method: String, signature: String, dexPc: Int,
+        condition: com.smaliscope.session.BpCondition? = null,
+    ): Bp {
         breakpoints.values.firstOrNull {
             it.fqcn == fqcn && it.method == method && it.signature == signature && it.dexPc == dexPc
-        }?.let { return it }
+        }?.let { existing ->
+            // 已有同位置断点：允许更新条件，方便「先下断点再加条件」。
+            if (condition != null) existing.condition = condition.takeUnless { it.isEmpty }
+            return existing
+        }
 
         val bp = Bp(id, fqcn, method, signature, dexPc)
+        bp.condition = condition?.takeUnless { it.isEmpty }
         breakpoints[bp.id] = bp
         install(bp)
         return bp
+    }
+
+    /** 给已存在的断点设/清条件（传 null 或空条件即清除）。 */
+    @Synchronized
+    fun setCondition(id: Int, condition: com.smaliscope.session.BpCondition?): Boolean {
+        val bp = breakpoints[id] ?: return false
+        bp.condition = condition?.takeUnless { it.isEmpty }
+        return true
     }
 
     private fun install(bp: Bp) {
@@ -128,6 +146,7 @@ class BreakpointEngine(
             },
             hitCount = it.hitCount,
             note = it.note,
+            condition = it.condition?.describe(),
         )
     }
 
