@@ -42,8 +42,17 @@ fun startWorkbench(port: Int) {
 class Workbench(private val dbg: Debugger) : AutoCloseable {
 
     private val sse = SseHub()
-    private val grok = com.smaliscope.grok.GrokBridge()
-    @Volatile private var grokBusy = false
+    // 内嵌终端：跑在一个每次会话都重建的目录里，里面放 CONTEXT.md（当前调试上下文），
+    // 并把 smaliscope 自己放进 PATH，方便在终端里直接用。
+    /** 终端连接代次：刷新页面会开新连接，用它避免旧连接的收尾把新终端关掉。 */
+    private val termGen = java.util.concurrent.atomic.AtomicLong(0)
+    private val termCwd = java.io.File(System.getProperty("user.home"), ".smaliscope/term-cwd")
+    private val term = com.smaliscope.term.TerminalBridge(
+        cwd = termCwd,
+        extraEnv = buildMap {
+            com.smaliscope.launcherDir()?.let { put("PATH", "$it${java.io.File.pathSeparator}${System.getenv("PATH") ?: ""}") }
+        },
+    )
 
     init {
         dbg.onState = { st ->
@@ -82,10 +91,16 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         server.createContext("/api/explain") { ex -> handle(ex) { json(ex, explain(query(ex))) } }
         server.createContext("/api/config") { ex -> handle(ex) { json(ex, config(ex, query(ex))) } }
         server.createContext("/api/config/test") { ex -> handle(ex) { json(ex, testLlm()) } }
-        server.createContext("/api/chat/status") { ex -> handle(ex) { json(ex, chatStatus()) } }
-        server.createContext("/api/chat") { ex -> handle(ex) { json(ex, chatSend(query(ex))) } }
-        server.createContext("/api/chat/reset") { ex -> handle(ex) { grok.reset(); json(ex, ok()) } }
-        server.createContext("/api/chat/stop") { ex -> handle(ex) { grok.stop(); json(ex, ok()) } }
+        server.createContext("/api/term/open") { ex -> termOpen(ex) }
+        server.createContext("/api/term/input") { ex -> handle(ex) { term.write(readBody(ex)); json(ex, ok()) } }
+        server.createContext("/api/term/resize") { ex ->
+            handle(ex) {
+                val q = query(ex)
+                term.resize(q["cols"]?.toIntOrNull() ?: 120, q["rows"]?.toIntOrNull() ?: 32)
+                json(ex, ok())
+            }
+        }
+        server.createContext("/api/term/close") { ex -> handle(ex) { term.close(); json(ex, ok()) } }
     }
 
     private fun ok() = Json.obj("ok" to Json.bool(true))
@@ -268,51 +283,82 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
         )
     }
 
-    // ── grok-build 对话（封装 CLI）─────────────────────────────────────────
-    private fun chatStatus(): String {
-        val s = grok.status()
-        return Json.obj(
-            "available" to Json.bool(s.available),
-            "message" to Json.str(s.message),
-            "hasSession" to Json.bool(s.hasSession),
-            "busy" to Json.bool(grokBusy),
+    // ── 内嵌终端 ───────────────────────────────────────────────────────────
+    /**
+     * 打开终端：这是一条 SSE 长连接。连上就起 PTY，shell 的原始输出（含 ANSI）逐块
+     * base64 后经 `out` 事件推给前端 xterm.js；连接断开就关掉 PTY。
+     */
+    private fun termOpen(ex: HttpExchange) {
+        val q = query(ex)
+        val cols = q["cols"]?.toIntOrNull() ?: 120
+        val rows = q["rows"]?.toIntOrNull() ?: 32
+        ex.responseHeaders.add("Content-Type", "text/event-stream; charset=utf-8")
+        ex.responseHeaders.add("Cache-Control", "no-cache")
+        ex.sendResponseHeaders(200, 0)
+        val os = ex.responseBody
+        val enc = java.util.Base64.getEncoder()
+        fun emit(event: String, data: String) = synchronized(os) {
+            runCatching { os.write("event: $event\ndata: $data\n\n".toByteArray(Charsets.UTF_8)); os.flush() }
+        }
+        writeSessionContext()   // 每次开终端刷新 CONTEXT.md，让 grok/codex 一进来就有上下文
+
+        // 只有一个 term 实例，但可能被打开多次（刷新页面、重开）。用代次号认领：
+        // 旧连接的收尾逻辑不能把新终端关掉——否则一刷新页面就「终端已退出」。
+        val myGen = termGen.incrementAndGet()
+        term.start(cols, rows,
+            onOutput = { bytes -> if (termGen.get() == myGen) emit("out", enc.encodeToString(bytes)) },
+            onExit = { if (termGen.get() == myGen) { emit("exit", "{}"); runCatching { ex.close() } } },
         )
+        try {
+            // 占住请求线程，SSE 不被关闭；顺便当断连探测。
+            while (term.isAlive && termGen.get() == myGen) Thread.sleep(500)
+        } catch (_: Throwable) {
+        } finally {
+            // 自己还是当前代次才真正关；被新连接取代的话什么都不做。
+            if (termGen.get() == myGen) term.close()
+            runCatching { ex.close() }
+        }
     }
 
+    private fun readBody(ex: HttpExchange): ByteArray = ex.requestBody.use { it.readBytes() }
+
     /**
-     * 发一句给 grok，后台跑，事件经 SSE 流回前端（chat-thought / chat-text / chat-done / chat-fail）。
-     * 一次只允许一轮：grok 子进程不便并发。
+     * 把当前调试上下文写进终端目录的 CONTEXT.md（功能②）。
+     * grok/codex 会自动读 cwd 里的上下文文件，于是它们一进终端就知道
+     * 「用户此刻在调什么、停在哪、寄存器是什么」，而不必自己瞎摸。
      */
-    private fun chatSend(q: Map<String, String>): String {
-        val msg = q["message"]?.takeIf { it.isNotBlank() } ?: error("消息为空")
-        synchronized(this) {
-            if (grokBusy) return Json.obj("ok" to Json.bool(false), "message" to Json.str("上一轮还在进行"))
-            grokBusy = true
-        }
-        sse.send("chat-start", "{}")
-        Thread({
-            try {
-                grok.send(msg) { ev ->
-                    when (ev) {
-                        is com.smaliscope.grok.GrokBridge.Event.Thought ->
-                            sse.send("chat-thought", Json.str(ev.text))
-                        is com.smaliscope.grok.GrokBridge.Event.Text ->
-                            sse.send("chat-text", Json.str(ev.text))
-                        is com.smaliscope.grok.GrokBridge.Event.Done ->
-                            sse.send("chat-done", Json.obj(
-                                "stopReason" to Json.str(ev.stopReason),
-                                "tokens" to Json.num(ev.tokens),
-                            ))
-                        is com.smaliscope.grok.GrokBridge.Event.Failed ->
-                            sse.send("chat-fail", Json.str(ev.message))
-                    }
+    private fun writeSessionContext() {
+        val sb = StringBuilder()
+        sb.appendLine("# 当前 SmaliScope 调试上下文")
+        sb.appendLine()
+        sb.appendLine("你在一个内嵌于 SmaliScope（smali 指令级调试器）的终端里。")
+        sb.appendLine("已注册的 `smaliscope` MCP 能驱动这个调试器；本机命令 `smaliscope` 也可直接用。")
+        sb.appendLine()
+        val pkg = dbg.pkg
+        if (pkg == null) {
+            sb.appendLine("- 当前**尚未载入**任何应用。可先 `list_apps` 看设备，再 `load_app`。")
+        } else {
+            sb.appendLine("- 已载入应用：`$pkg`（${dbg.apk?.classCount ?: 0} 个类）")
+            val st = dbg.state
+            if (st.status == "suspended") {
+                val f = st.frames.firstOrNull()
+                sb.appendLine("- **当前停在断点**：`${f?.fqcn}.${f?.method}${f?.signature}` dex_pc=${f?.dexPc}")
+                f?.registers?.take(12)?.forEach {
+                    sb.appendLine("    - ${it.name} ${it.type} = ${it.value}${if (it.readable) "" else "（不可读）"}")
                 }
-            } finally {
-                grokBusy = false
-                sse.send("chat-end", "{}")
+                sb.appendLine("  想核实这些值，直接用 MCP 的 `read_registers` / `read_stack`——和界面是同一个会话。")
+            } else {
+                sb.appendLine("- 状态：${st.message}")
             }
-        }, "grok-chat").start()
-        return ok()
+        }
+        sb.appendLine()
+        sb.appendLine("> 注意：寄存器显示「不可读 / 此处不可用」表示真读不出来，不是 0/null，别据此推断。")
+        runCatching {
+            termCwd.mkdirs()
+            java.io.File(termCwd, "CONTEXT.md").writeText(sb.toString())
+            // codex 读 AGENTS.md，grok 读 GROK.md / AGENTS.md，都指过去。
+            java.io.File(termCwd, "AGENTS.md").writeText(sb.toString())
+        }
     }
 
     private fun testLlm(): String = try {
@@ -392,6 +438,7 @@ class Workbench(private val dbg: Debugger) : AutoCloseable {
     }
 
     override fun close() {
+        runCatching { term.close() }
         runCatching { dbg.close() }
         sse.closeAll()
     }

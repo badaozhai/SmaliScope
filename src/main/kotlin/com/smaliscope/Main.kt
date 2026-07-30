@@ -25,6 +25,12 @@ SmaliScope —— 面向新手的 DEX/smali 指令级断点调试器
 /** APK 本地缓存目录。 */
 val cacheDir: java.io.File = java.io.File(System.getProperty("user.home"), ".smaliscope/apks")
 
+/** 本可执行文件所在的 bin 目录（installDist 布局），供终端把 smaliscope 放进 PATH。 */
+fun launcherDir(): String? = runCatching {
+    val jar = java.io.File(object {}.javaClass.protectionDomain.codeSource.location.toURI())
+    jar.parentFile?.parentFile?.resolve("bin")?.takeIf { it.isDirectory }?.absolutePath
+}.getOrNull()
+
 fun main(args: Array<String>) {
     // 兼容 README 的 `./gradlew run --args="5678"`：纯数字参数即冒烟测试的目标 pid。
     val argv = args.toList()

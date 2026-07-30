@@ -851,81 +851,73 @@ function connectEvents() {
     list.scrollTop = list.scrollHeight;
     if (list.childElementCount > 400) list.removeChild(list.firstChild);
   });
-  es.addEventListener('chat-start', () => chatOnStart());
-  es.addEventListener('chat-thought', (e) => chatOnThought(JSON.parse(e.data)));
-  es.addEventListener('chat-text', (e) => chatOnText(JSON.parse(e.data)));
-  es.addEventListener('chat-done', (e) => chatOnDone(JSON.parse(e.data)));
-  es.addEventListener('chat-fail', (e) => chatOnFail(JSON.parse(e.data)));
-  es.addEventListener('chat-end', () => chatOnEnd());
   es.onerror = () => { /* EventSource 会自动重连 */ };
 }
 
-// ── grok 对话抽屉 ────────────────────────────────────────────────────────
-const CH = { busy: false, cur: null, curText: '', think: null };
+// ── 内嵌终端（xterm.js + 后端 PTY）────────────────────────────────────────
+const TERM = { term: null, fit: null, es: null };
 
-async function refreshChatStatus() {
-  const s = await get('/api/chat/status').catch(() => null);
-  const el2 = $('#chatStatus');
-  if (!s) { el2.textContent = '状态未知'; return; }
-  el2.textContent = s.available ? (s.hasSession ? '已就绪 · 有会话' : '已就绪') : '未检测到 grok';
-  $('#chatSend').disabled = !s.available || s.busy;
-}
+function openTerminal() {
+  const drawer = $('#termDrawer');
+  drawer.classList.remove('hidden');
+  if (TERM.term) { TERM.fit && TERM.fit.fit(); TERM.term.focus(); return; }
 
-function chatBubble(cls, text) {
-  const box = $('#chatLog');
-  const d = el('div', 'chat-msg ' + cls, text || '');
-  box.appendChild(d); box.scrollTop = box.scrollHeight;
-  return d;
-}
-function chatOnStart() {
-  CH.busy = true; CH.cur = null; CH.curText = ''; CH.think = null;
-  $('#chatSend').disabled = true;
-}
-function chatOnThought(t) {
-  // 思考流：折叠成一行灰字，滚动更新（不逐条堆积）。
-  if (!CH.think) { CH.think = el('div', 'chat-think', ''); $('#chatLog').appendChild(CH.think); }
-  CH.think.textContent = '思考中…' + (CH.think.textContent + t).slice(-120);
-  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
-}
-function chatOnText(t) {
-  if (CH.think) { CH.think.remove(); CH.think = null; }
-  if (!CH.cur) { CH.cur = chatBubble('grok', ''); CH.curText = ''; }
-  CH.curText += t; CH.cur.textContent = CH.curText;
-  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
-}
-function chatOnDone() {
-  if (CH.think) { CH.think.remove(); CH.think = null; }
-  CH.cur = null;
-  // 注：grok 会另起一个 smaliscope MCP 进程来调试，和本界面的手动调试是两个独立会话，
-  // 不共享断点/挂起状态。所以这里不去动断点面板。
-}
-function chatOnFail(m) {
-  if (CH.think) { CH.think.remove(); CH.think = null; }
-  chatBubble('grok err', '⚠ ' + m);
-  CH.cur = null;
-}
-function chatOnEnd() {
-  CH.busy = false;
-  refreshChatStatus();
-}
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+    fontSize: 13, cursorBlink: true,
+    theme: { background: '#14171c', foreground: '#d8dee9', cursor: '#4aa3ff' },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open($('#termHost'));
+  fit.fit();
+  TERM.term = term; TERM.fit = fit;
 
-async function sendChat() {
-  const ta = $('#chatText');
-  const msg = ta.value.trim();
-  if (!msg || CH.busy) return;
-  chatBubble('user', msg);
-  ta.value = '';
-  try { await api('/api/chat', { message: msg }); }
-  catch (e) { chatOnFail(e.message); }
+  const dec = new TextDecoder();
+  connectTerm(term.cols, term.rows);
+
+  // 按键 → POST 给 PTY。必须串行：HTTP 请求不保序，并发会让「ls」变「sl」。
+  let inQ = Promise.resolve();
+  term.onData((d) => {
+    inQ = inQ.then(() =>
+      fetch('/api/term/input', { method: 'POST', body: new Blob([d]) }).catch(() => {}));
+  });
+  // 尺寸变化 → 通知后端 ioctl
+  term.onResize(({ cols, rows }) => {
+    get('/api/term/resize', { cols, rows }).catch(() => {});
+  });
+  window.addEventListener('resize', () => TERM.fit && TERM.fit.fit());
+  setTimeout(() => { fit.fit(); term.focus(); }, 50);
+
+  function connectTerm(cols, rows) {
+    const es = new EventSource(`/api/term/open?cols=${cols}&rows=${rows}`);
+    TERM.es = es;
+    es.addEventListener('out', (e) => {
+      // 后端把 PTY 原始字节 base64 过来（裸 base64，不是 JSON），解码后写进 xterm
+      const bin = atob(e.data);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      term.write(dec.decode(arr, { stream: true }));
+    });
+    es.addEventListener('exit', () => { term.write('\r\n\x1b[90m[终端已退出，点「重开」]\x1b[0m\r\n'); es.close(); });
+  }
 }
 
-$('#btnChat').onclick = () => { $('#chatDrawer').classList.toggle('hidden'); refreshChatStatus(); };
-$('#chatCloseBtn').onclick = () => $('#chatDrawer').classList.add('hidden');
-$('#chatSend').onclick = sendChat;
-$('#chatReset').onclick = async () => { await api('/api/chat/reset'); $('#chatLog').innerHTML = ''; refreshChatStatus(); };
-$('#chatText').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); }
-});
+function closeTerminal() { $('#termDrawer').classList.add('hidden'); }
+
+async function restartTerminal() {
+  if (TERM.es) TERM.es.close();
+  await api('/api/term/close').catch(() => {});
+  if (TERM.term) { TERM.term.dispose(); TERM.term = null; }
+  openTerminal();
+}
+
+$('#btnTerm').onclick = () => {
+  const d = $('#termDrawer');
+  if (d.classList.contains('hidden')) openTerminal(); else closeTerminal();
+};
+$('#termCloseBtn').onclick = closeTerminal;
+$('#termRestart').onclick = restartTerminal;
 
 // ── 绑定 ─────────────────────────────────────────────────────────────────
 $('#loadApp').onclick = loadApp;
